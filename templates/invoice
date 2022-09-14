@@ -1,0 +1,2 @@
+<img src="data:image/png;base64, {{.AsQR}}" alt="{{.Invoice}}"/>
+<a href="lightning:{{.Invoice}}" class="invoice">{{.Invoice}}</a>
