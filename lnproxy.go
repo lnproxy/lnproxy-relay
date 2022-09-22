@@ -25,10 +25,20 @@ import (
 )
 
 const (
+	EXPIRY_BUFFER = 600
+	FEE_BASE_MSAT = 1000
+	FEE_PPM = 6000
+	CLTV_DELTA_ALPHA = 3
+	CLTV_DELTA_BETA = 6
+	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
+	MAX_CLTV_DELTA = 2016
+
 	// setup in /etc/tor/torrc
-	torPort = 
+	httpPort = 
+	// Whatever you want
+	httpsPort = 
 	// grep restlisten ~/.lnd/lnd.conf
-	host    = 
+	lndHost    = 
 	lndPort = 
 	// lncli bakemacaroon --timeout 3600 \
 	//   uri:/lnrpc.Lightning/DecodePayReq \
@@ -50,12 +60,13 @@ type PaymentRequest struct {
 	Description     string `json:"description"`
 	DescriptionHash string `json:"description_hash"`
 	NumMsat         int64  `json:"num_msat,string"`
+	CltvExpiry      int64  `json:"cltv_expiry,string"`
 }
 
 func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s:%d/v1/payreq/%s", host, lndPort, invoice),
+		fmt.Sprintf("https://%s:%d/v1/payreq/%s", lndHost, lndPort, invoice),
 		nil,
 	)
 	if err != nil {
@@ -90,10 +101,8 @@ type WrappedPaymentRequest struct {
 	ValueMsat       int64  `json:"value_msat,string"`
 	DescriptionHash []byte `json:"description_hash,omitempty"`
 	Expiry          int64  `json:"expiry,string"`
+	CltvExpiry      int64  `json:"cltv_expiry,string"`
 }
-
-const EXPIRY_BUFFER = 600
-const FEE_PPM = 7000
 
 func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
 	q := WrappedPaymentRequest{}
@@ -111,10 +120,19 @@ func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
 		return nil, err
 	}
 	q.Hash = hash
-	q.ValueMsat = p.NumMsat + (p.NumMsat*FEE_PPM)/1_000_000
+	if p.NumMsat == 0 {
+		q.ValueMsat = 0
+	} else {
+		q.ValueMsat = p.NumMsat + (p.NumMsat*FEE_PPM)/1_000_000 + FEE_BASE_MSAT
+	}
 	q.Expiry = p.Timestamp + p.Expiry - time.Now().Unix() - EXPIRY_BUFFER
 	if q.Expiry < 0 {
 		err = fmt.Errorf("Payment request expiration is too close.")
+		return nil, err
+	}
+	q.CltvExpiry = p.CltvExpiry * CLTV_DELTA_BETA + CLTV_DELTA_ALPHA
+	if q.CltvExpiry >= MAX_CLTV_DELTA {
+		err = fmt.Errorf("cltv_expiry is too long")
 		return nil, err
 	}
 	return &q, nil
@@ -143,7 +161,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s:%d/v2/invoices/hodl", host, lndPort),
+		fmt.Sprintf("https://%s:%d/v2/invoices/hodl", lndHost, lndPort),
 		buf,
 	)
 	if err != nil {
@@ -181,7 +199,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 func lookupInvoice(hash []byte) (string, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s:%d/v1/invoice/%s", host, lndPort, hex.EncodeToString(hash)),
+		fmt.Sprintf("https://%s:%d/v1/invoice/%s", lndHost, lndPort, hex.EncodeToString(hash)),
 		nil,
 	)
 	if err != nil {
@@ -218,12 +236,12 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc, err := url.Parse(fmt.Sprintf(
 		"wss://%s:%d/v2/invoices/subscribe/%s",
-		host, lndPort, base64.URLEncoding.EncodeToString(p.Hash),
+		lndHost, lndPort, base64.URLEncoding.EncodeToString(p.Hash),
 	))
 	if err != nil {
 		log.Panicln(err)
 	}
-	origin, err := url.Parse("http://" + host)
+	origin, err := url.Parse("http://" + lndHost)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -285,7 +303,7 @@ func cancelWrappedInvoice(hash []byte) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s:%d/v2/invoices/cancel", host, lndPort),
+		fmt.Sprintf("https://%s:%d/v2/invoices/cancel", lndHost, lndPort),
 		buf,
 	)
 	if err != nil {
@@ -331,6 +349,7 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 		FeeLimitMsat      int64   `json:"fee_limit_msat,string"`
 		NoInflightUpdates bool    `json:"no_inflight_updates"`
 		TimePref          float64 `json:"time_pref"`
+		CltvLimit         int32   `json:"cltv_limit"`
 	}{
 		Invoice:           original_invoice,
 		AmtMsat:           msat,
@@ -338,15 +357,16 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 		FeeLimitMsat:      (paid_msat * FEE_PPM) / 1_000_000,
 		NoInflightUpdates: true,
 		TimePref:          0.9,
+		CltvLimit:         int32(p.CltvExpiry - CLTV_DELTA_ALPHA),
 	}
 
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
-	loc, err := url.Parse(fmt.Sprintf("wss://%s:%d/v2/router/send?method=POST", host, lndPort))
+	loc, err := url.Parse(fmt.Sprintf("wss://%s:%d/v2/router/send?method=POST", lndHost, lndPort))
 	if err != nil {
 		log.Panicln(err)
 	}
-	origin, err := url.Parse("http://" + host)
+	origin, err := url.Parse("http://" + lndHost)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -414,7 +434,7 @@ InFlight:
 	buf := bytes.NewBuffer(params2)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s:%d/v2/invoices/settle", host, lndPort),
+		fmt.Sprintf("https://%s:%d/v2/invoices/settle", lndHost, lndPort),
 		buf,
 	)
 	if err != nil {
@@ -473,7 +493,7 @@ func wrap(invoice string) (string, error) {
 	return i, nil
 }
 
-var templates = template.Must(template.ParseGlob("/templates/*"))
+var templates = template.Must(template.ParseGlob("templates/*"))
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	err := templates.ExecuteTemplate(w, "start", nil)
@@ -554,25 +574,21 @@ func main() {
 	certManager := autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"),
-		Cache:      autocert.DirCache("/certs"),
+		Cache:      autocert.DirCache("certs"),
 	}
 
-	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("/assets"))))
-	http.Handle("/.well-known/", addNostrHeaders(http.StripPrefix("/.well-known/", http.FileServer(http.Dir("/well-known")))))
+	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
+	http.Handle("/.well-known/", addNostrHeaders(http.StripPrefix("/.well-known/", http.FileServer(http.Dir("well-known")))))
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/wrap", redirectHandler)
 	http.HandleFunc("/wrap/", wrapHandler)
 	http.HandleFunc("/api/", apiHandler)
 
 	server := &http.Server{
-		Addr: ":https",
-		TLSConfig: &tls.Config{
-			GetCertificate: certManager.GetCertificate,
-		},
+		Addr: fmt.Sprintf("localhost:%d", httpsPort),
+		TLSConfig: certManager.TLSConfig(),
 	}
 
-	go http.ListenAndServe(torPort, nil)
-	go http.ListenAndServe(":http", certManager.HTTPHandler(nil))
-
+	go http.ListenAndServe(fmt.Sprintf("localhost:%d", httpPort), nil)
 	log.Panicln(server.ListenAndServeTLS("", ""))
 }
