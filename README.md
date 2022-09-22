@@ -29,7 +29,7 @@ $ torify curl http://torhiddenservicehostname.onion/api/{your invoice}
 
 ## Dev
 
-This little binary uses the lnd macaroons for authentication and the lnd REST API to handle lightning things so running it requires lnd.
+This little binary uses the lnd REST API to handle lightning things so running it requires lnd.
 
 To build, just set the parameters in `lnproxy.go` and run `go build lnproxy.go`, or something like that.
 
