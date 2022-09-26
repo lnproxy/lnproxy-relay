@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+        <meta charset="utf-8">
+        <meta http-equiv="onion-location" content="http://{{template "onion"}}/">
+        <title>lnproxy</title>
+</head>
+
+<body>
+
+<header>
+        <h1><a href="/">lnproxy</a></h1>
+</header>
