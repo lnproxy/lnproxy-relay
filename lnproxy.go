@@ -20,7 +20,6 @@ import (
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
-	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/websocket"
 )
 
@@ -33,23 +32,35 @@ const (
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 	MAX_CLTV_DELTA = 2016
 
-	// setup in /etc/tor/torrc
+	// Setup in /etc/tor/torrc
+	// For example:
+	// 	echo HiddenServiceDir /var/tor/lnproxy/ >> /etc/tor/torrc
+	// 	echo HiddenServicePort 80 127.0.0.1:8888 >> /etc/tor/torrc
+	// then set:
+	// 	httpPort = 8888
+	// and access the site at the address in:
+	// 	/var/tor/lnproxy/hostname
 	httpPort = 
-	// Whatever you want
-	httpsPort = 
-	// grep restlisten ~/.lnd/lnd.conf
-	lndHost    = 
+	// Should match `restlisten` in ~/.lnd/lnd.conf
+        // For example:
+        //      echo restlisten=127.0.0.1:9999 >> ~/.lnd/lnd.conf
+        // then set:
+        //      lndHost = 127.0.0.1
+	// 	lndPort = 9999
+	lndHost = 
 	lndPort = 
-	// lncli bakemacaroon --timeout 3600 \
-	//   uri:/lnrpc.Lightning/DecodePayReq \
-	//   uri:/invoicesrpc.Invoices/AddHoldInvoice \
-	//   uri:/lnrpc.Lightning/LookupInvoice \
-	//   uri:/invoicesrpc.Invoices/CancelInvoice \
-	//   uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
-	//   uri:/routerrpc.Router/SendPaymentV2 \
-	//   uri:/invoicesrpc.Invoices/SettleInvoice
+	// Set to a string with the value of:
+	// 	lncli bakemacaroon --timeout 3600 \
+	// 	  uri:/lnrpc.Lightning/DecodePayReq \
+	// 	  uri:/invoicesrpc.Invoices/AddHoldInvoice \
+	// 	  uri:/lnrpc.Lightning/LookupInvoice \
+	// 	  uri:/invoicesrpc.Invoices/CancelInvoice \
+	// 	  uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+	// 	  uri:/routerrpc.Router/SendPaymentV2 \
+	// 	  uri:/invoicesrpc.Invoices/SettleInvoice
 	macaroon = 
-	// cat ~/.lnd/tls.cert
+        // Set to a string with the value of:
+	// 	cat ~/.lnd/tls.cert
 	lndCert  = 
 )
 
@@ -551,13 +562,6 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s\n", i)
 }
 
-func addNostrHeaders(h http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Access-Control-Allow-Origin", "*")
-		h.ServeHTTP(w, r)
-	}
-}
-
 var LND *http.Client
 var TlsConfig *tls.Config
 
@@ -571,24 +575,11 @@ func main() {
 		},
 	}
 
-	certManager := autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("example.com", "www.example.com"),
-		Cache:      autocert.DirCache("certs"),
-	}
-
 	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
-	http.Handle("/.well-known/", addNostrHeaders(http.StripPrefix("/.well-known/", http.FileServer(http.Dir("well-known")))))
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/wrap", redirectHandler)
 	http.HandleFunc("/wrap/", wrapHandler)
 	http.HandleFunc("/api/", apiHandler)
 
-	server := &http.Server{
-		Addr: fmt.Sprintf("localhost:%d", httpsPort),
-		TLSConfig: certManager.TLSConfig(),
-	}
-
-	go http.ListenAndServe(fmt.Sprintf("localhost:%d", httpPort), nil)
-	log.Panicln(server.ListenAndServeTLS("", ""))
+	log.Panicln(http.ListenAndServe(fmt.Sprintf("localhost:%d", httpPort), nil))
 }
