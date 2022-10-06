@@ -8,60 +8,37 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
-	"html/template"
-	"image/color"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	qrcode "github.com/skip2/go-qrcode"
 	"golang.org/x/net/websocket"
 )
 
 const (
-	EXPIRY_BUFFER = 600
-	FEE_BASE_MSAT = 1000
-	FEE_PPM = 6000
+	EXPIRY_BUFFER    = 600
+	FEE_BASE_MSAT    = 1000
+	FEE_PPM          = 6000
 	CLTV_DELTA_ALPHA = 3
-	CLTV_DELTA_BETA = 6
+	CLTV_DELTA_BETA  = 6
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 	MAX_CLTV_DELTA = 2016
+)
 
-	// Setup in /etc/tor/torrc
-	// For example:
-	// 	echo HiddenServiceDir /var/tor/lnproxy/ >> /etc/tor/torrc
-	// 	echo HiddenServicePort 80 127.0.0.1:8888 >> /etc/tor/torrc
-	// then set:
-	// 	httpPort = 8888
-	// and access the site at the address in:
-	// 	/var/tor/lnproxy/hostname
-	httpPort = 
-	// Should match `restlisten` in ~/.lnd/lnd.conf
-        // For example:
-        //      echo restlisten=127.0.0.1:9999 >> ~/.lnd/lnd.conf
-        // then set:
-        //      lndHost = 127.0.0.1
-	// 	lndPort = 9999
-	lndHost = 
-	lndPort = 
-	// Set to a string with the value of:
-	// 	lncli bakemacaroon --timeout 3600 \
-	// 	  uri:/lnrpc.Lightning/DecodePayReq \
-	// 	  uri:/invoicesrpc.Invoices/AddHoldInvoice \
-	// 	  uri:/lnrpc.Lightning/LookupInvoice \
-	// 	  uri:/invoicesrpc.Invoices/CancelInvoice \
-	// 	  uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
-	// 	  uri:/routerrpc.Router/SendPaymentV2 \
-	// 	  uri:/invoicesrpc.Invoices/SettleInvoice
-	macaroon = 
-        // Set to a string with the value of:
-	// 	cat ~/.lnd/tls.cert
-	lndCert  = 
+var (
+	httpPort    = flag.Int("port", 4747, "http port over which to expose api")
+	lndHost     = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
+	lndCertPath = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
+	lndCert     []byte
+	macaroon    string
 )
 
 type PaymentRequest struct {
@@ -77,7 +54,7 @@ type PaymentRequest struct {
 func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s:%d/v1/payreq/%s", lndHost, lndPort, invoice),
+		fmt.Sprintf("https://%s/v1/payreq/%s", *lndHost, invoice),
 		nil,
 	)
 	if err != nil {
@@ -141,25 +118,12 @@ func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
 		err = fmt.Errorf("Payment request expiration is too close.")
 		return nil, err
 	}
-	q.CltvExpiry = p.CltvExpiry * CLTV_DELTA_BETA + CLTV_DELTA_ALPHA
+	q.CltvExpiry = p.CltvExpiry*CLTV_DELTA_BETA + CLTV_DELTA_ALPHA
 	if q.CltvExpiry >= MAX_CLTV_DELTA {
 		err = fmt.Errorf("cltv_expiry is too long")
 		return nil, err
 	}
 	return &q, nil
-}
-
-func QR(invoice string) string {
-	q, err := qrcode.New(strings.ToUpper(invoice), qrcode.Medium)
-	if err != nil {
-		log.Panicln(err)
-	}
-	q.BackgroundColor = color.Transparent
-	b, err := q.PNG(-8)
-	if err != nil {
-		log.Panicln(err)
-	}
-	return base64.StdEncoding.EncodeToString(b)
 }
 
 var ErrInvoiceExists = errors.New("Invoice with payment hash already exists")
@@ -172,7 +136,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s:%d/v2/invoices/hodl", lndHost, lndPort),
+		fmt.Sprintf("https://%s/v2/invoices/hodl", *lndHost),
 		buf,
 	)
 	if err != nil {
@@ -210,7 +174,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 func lookupInvoice(hash []byte) (string, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s:%d/v1/invoice/%s", lndHost, lndPort, hex.EncodeToString(hash)),
+		fmt.Sprintf("https://%s/v1/invoice/%s", *lndHost, hex.EncodeToString(hash)),
 		nil,
 	)
 	if err != nil {
@@ -246,13 +210,13 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc, err := url.Parse(fmt.Sprintf(
-		"wss://%s:%d/v2/invoices/subscribe/%s",
-		lndHost, lndPort, base64.URLEncoding.EncodeToString(p.Hash),
+		"wss://%s/v2/invoices/subscribe/%s",
+		*lndHost, base64.URLEncoding.EncodeToString(p.Hash),
 	))
 	if err != nil {
 		log.Panicln(err)
 	}
-	origin, err := url.Parse("http://" + lndHost)
+	origin, err := url.Parse("http://" + *lndHost)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -314,7 +278,7 @@ func cancelWrappedInvoice(hash []byte) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s:%d/v2/invoices/cancel", lndHost, lndPort),
+		fmt.Sprintf("https://%s/v2/invoices/cancel", *lndHost),
 		buf,
 	)
 	if err != nil {
@@ -373,11 +337,11 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
-	loc, err := url.Parse(fmt.Sprintf("wss://%s:%d/v2/router/send?method=POST", lndHost, lndPort))
+	loc, err := url.Parse(fmt.Sprintf("wss://%s/v2/router/send?method=POST", *lndHost))
 	if err != nil {
 		log.Panicln(err)
 	}
-	origin, err := url.Parse("http://" + lndHost)
+	origin, err := url.Parse("http://" + *lndHost)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -412,10 +376,10 @@ InFlight:
 		}
 		switch message.Result.Status {
 		case "FAILED":
-			time.Sleep(500 * time.Millisecond)
-			settleWrappedInvoice(p, paid_msat, original_invoice)
+			cancelWrappedInvoice(p.Hash)
 			return
 		case "UNKNOWN", "IN_FLIGHT":
+			time.Sleep(500 * time.Millisecond)
 			break
 		case "SUCCEEDED":
 			preimage = message.Result.PreImage
@@ -445,7 +409,7 @@ InFlight:
 	buf := bytes.NewBuffer(params2)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s:%d/v2/invoices/settle", lndHost, lndPort),
+		fmt.Sprintf("https://%s/v2/invoices/settle", *lndHost),
 		buf,
 	)
 	if err != nil {
@@ -504,49 +468,7 @@ func wrap(invoice string) (string, error) {
 	return i, nil
 }
 
-var templates = template.Must(template.ParseGlob("templates/*"))
-
-func indexHandler(w http.ResponseWriter, r *http.Request) {
-	err := templates.ExecuteTemplate(w, "start", nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func redirectHandler(w http.ResponseWriter, r *http.Request) {
-	invoice := r.FormValue("body")
-	invoice = strings.TrimSpace(invoice)
-	invoice = strings.ToLower(invoice)
-	invoice = strings.TrimPrefix(invoice, "lightning:")
-	http.Redirect(w, r, r.URL.Path+"/"+invoice, http.StatusSeeOther)
-}
-
-var validPath = regexp.MustCompile("^/(wrap|api)/(lnbc[a-z0-9]+)$")
-
-func wrapHandler(w http.ResponseWriter, r *http.Request) {
-	m := validPath.FindStringSubmatch(r.URL.Path)
-	if m == nil {
-		http.NotFound(w, r)
-		return
-	}
-	i, err := wrap(m[2])
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	err = templates.ExecuteTemplate(w, "wrap",
-		struct {
-			Invoice string
-			AsQR    string
-		}{
-			Invoice: i,
-			AsQR:    QR(i),
-		},
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
+var validPath = regexp.MustCompile("^/(lnbc[a-z0-9]+)$")
 
 func apiHandler(w http.ResponseWriter, r *http.Request) {
 	m := validPath.FindStringSubmatch(r.URL.Path)
@@ -554,7 +476,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	i, err := wrap(m[2])
+	i, err := wrap(m[1])
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -566,8 +488,46 @@ var LND *http.Client
 var TlsConfig *tls.Config
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon
+lnproxy.macaroon
+	Path to lnproxy macaroon. Generate it with:
+		lncli bakemacaroon --save_to lnproxy.macaroon \
+			uri:/lnrpc.Lightning/DecodePayReq \
+			uri:/lnrpc.Lightning/LookupInvoice \
+			uri:/invoicesrpc.Invoices/AddHoldInvoice \
+			uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+			uri:/invoicesrpc.Invoices/CancelInvoice \
+			uri:/invoicesrpc.Invoices/SettleInvoice \
+			uri:/routerrpc.Router/SendPaymentV2
+`, os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(2)
+	}
+	flag.Parse()
+	if len(flag.Args()) != 1 {
+		flag.Usage()
+		os.Exit(2)
+	}
+	if strings.HasPrefix(*lndCertPath, "~/") {
+		home, _ := os.UserHomeDir()
+		path := filepath.Join(home, (*lndCertPath)[2:])
+		lndCertPath = &path
+	}
+	lndCert, err := os.ReadFile(*lndCertPath)
+	if err != nil {
+		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
+		os.Exit(2)
+	}
+	macaroonBytes, err := os.ReadFile(flag.Args()[0])
+	if err != nil {
+		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnproxy macaroon file: %v\n", err)
+		os.Exit(2)
+	}
+	macaroon = hex.EncodeToString(macaroonBytes)
+
 	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM([]byte(lndCert))
+	caCertPool.AppendCertsFromPEM(lndCert)
 	TlsConfig = &tls.Config{RootCAs: caCertPool}
 	LND = &http.Client{
 		Transport: &http.Transport{
@@ -575,11 +535,7 @@ func main() {
 		},
 	}
 
-	http.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("assets"))))
-	http.HandleFunc("/", indexHandler)
-	http.HandleFunc("/wrap", redirectHandler)
-	http.HandleFunc("/wrap/", wrapHandler)
-	http.HandleFunc("/api/", apiHandler)
+	http.HandleFunc("/", apiHandler)
 
-	log.Panicln(http.ListenAndServe(fmt.Sprintf("localhost:%d", httpPort), nil))
+	log.Panicln(http.ListenAndServe(fmt.Sprintf("localhost:%d", *httpPort), nil))
 }
