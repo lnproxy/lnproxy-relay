@@ -22,13 +22,11 @@ Anyone running a lightning network nodecan run an lnproxy server. **Users should
 
 This little binary uses the lnd REST API to handle lightning things so running it requires lnd.
 
-To build, just set the parameters in `lnproxy.go` and run `go build lnproxy.go`, or something like that.
-
 ## Run an lnproxy server
 
 The more nodes run an api server, the more censorship resistant the project will be.
 It's easy, just
-- build the lnproxy binary (binary releases coming soon),
+- build the lnproxy binary (prebuilt releases coming soon), 
 - generate a macaroon with minimal permissions for lnproxy to use:
   ```
     lncli bakemacaroon --save_to lnproxy.macaroon \
