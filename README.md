@@ -18,18 +18,32 @@ For additional privacy, using a vpn or the lnproxy node's tor hidden service pre
 
 Anyone running a lightning network nodecan run an lnproxy server. **Users should verify that wrapped invoices are, in fact, conditional by decoding them to ensure that the payment hash matches that of the original invoice.**
 
-## API
-
-```
-$ curl https://example.com/api/{your invoice}
-{wrapped invoice}
-$ torify curl http://torhiddenservicehostname.onion/api/{your invoice}
-{wrapped invoice}
-```
-
 ## Dev
 
 This little binary uses the lnd REST API to handle lightning things so running it requires lnd.
 
 To build, just set the parameters in `lnproxy.go` and run `go build lnproxy.go`, or something like that.
 
+## Run an lnproxy server
+
+The more nodes run an api server, the more censorship resistant the project will be.
+It's easy, just
+- build the lnproxy binary (binary releases coming soon),
+- generate a macaroon with minimal permissions for lnproxy to use:
+  ```
+    lncli bakemacaroon --save_to lnproxy.macaroon \
+      uri:/lnrpc.Lightning/DecodePayReq \
+      uri:/lnrpc.Lightning/LookupInvoice \
+      uri:/invoicesrpc.Invoices/AddHoldInvoice \
+      uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+      uri:/invoicesrpc.Invoices/CancelInvoice \
+      uri:/invoicesrpc.Invoices/SettleInvoice \
+      uri:/routerrpc.Router/SendPaymentV2
+  ```
+- run: `./lnproxy lnproxy.macaroon`
+- on a separate terminal:
+  ```
+    curl https://localhost:4747/{your invoice}
+  ```
+
+Once you've played with it a bit and set up tls or a tor hidden service for your api server, send me a message so I can add you to the gateway at https://lnproxy.org.
