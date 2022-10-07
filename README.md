@@ -41,7 +41,7 @@ It's easy, just
 - run: `./lnproxy lnproxy.macaroon`
 - on a separate terminal:
   ```
-    curl https://localhost:4747/{your invoice}
+    curl http://localhost:4747/{your invoice}
   ```
 
 Once you've played with it a bit and set up tls or a tor hidden service for your api server, send me a message so I can add you to the gateway at https://lnproxy.org.
