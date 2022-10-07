@@ -1,5 +1,0 @@
-{{template "head"}}
-
-{{template "invoice" .}}
-
-{{template "foot"}}
