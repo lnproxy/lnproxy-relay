@@ -34,11 +34,12 @@ const (
 )
 
 var (
-	httpPort    = flag.Int("port", 4747, "http port over which to expose api")
-	lndHost     = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
-	lndCertPath = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
-	lndCert     []byte
-	macaroon    string
+	httpPort     = flag.Int("port", 4747, "http port over which to expose api")
+	lndHost      = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
+	lndNoRestTls = flag.Bool("lnd-no-rest-tls", false, "Should match no-rest-tls in lnd.conf)")
+	lndCertPath  = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
+	lndCert      []byte
+	macaroon     string
 )
 
 type PaymentRequest struct {
@@ -509,16 +510,7 @@ lnproxy.macaroon
 		flag.Usage()
 		os.Exit(2)
 	}
-	if strings.HasPrefix(*lndCertPath, "~/") {
-		home, _ := os.UserHomeDir()
-		path := filepath.Join(home, (*lndCertPath)[2:])
-		lndCertPath = &path
-	}
-	lndCert, err := os.ReadFile(*lndCertPath)
-	if err != nil {
-		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
-		os.Exit(2)
-	}
+
 	macaroonBytes, err := os.ReadFile(flag.Args()[0])
 	if err != nil {
 		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnproxy macaroon file: %v\n", err)
@@ -526,13 +518,28 @@ lnproxy.macaroon
 	}
 	macaroon = hex.EncodeToString(macaroonBytes)
 
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(lndCert)
-	TlsConfig = &tls.Config{RootCAs: caCertPool}
-	LND = &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: TlsConfig,
-		},
+	if *lndNoRestTls {
+		LND = &http.Client{}
+	} else {
+		if strings.HasPrefix(*lndCertPath, "~/") {
+			home, _ := os.UserHomeDir()
+			path := filepath.Join(home, (*lndCertPath)[2:])
+			lndCertPath = &path
+		}
+		lndCert, err := os.ReadFile(*lndCertPath)
+		if err != nil {
+			fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
+			os.Exit(2)
+		}
+
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(lndCert)
+		TlsConfig = &tls.Config{RootCAs: caCertPool}
+		LND = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: TlsConfig,
+			},
+		}
 	}
 
 	http.HandleFunc("/", apiHandler)
