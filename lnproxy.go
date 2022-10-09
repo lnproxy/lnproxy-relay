@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -15,9 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -34,12 +31,11 @@ const (
 )
 
 var (
-	httpPort     = flag.Int("port", 4747, "http port over which to expose api")
-	lndHost      = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
-	lndNoRestTls = flag.Bool("lnd-no-rest-tls", false, "Should match no-rest-tls in lnd.conf)")
-	lndCertPath  = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
-	lndCert      []byte
-	macaroon     string
+	httpPort    = flag.Int("port", 4747, "http port over which to expose api")
+	lndHost     = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
+	lndCertPath = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
+	lndCert     []byte
+	macaroon    string
 )
 
 type PaymentRequest struct {
@@ -55,7 +51,7 @@ type PaymentRequest struct {
 func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s/v1/payreq/%s", *lndHost, invoice),
+		fmt.Sprintf("http://%s/v1/payreq/%s", *lndHost, invoice),
 		nil,
 	)
 	if err != nil {
@@ -137,7 +133,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s/v2/invoices/hodl", *lndHost),
+		fmt.Sprintf("http://%s/v2/invoices/hodl", *lndHost),
 		buf,
 	)
 	if err != nil {
@@ -175,7 +171,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 func lookupInvoice(hash []byte) (string, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s/v1/invoice/%s", *lndHost, hex.EncodeToString(hash)),
+		fmt.Sprintf("http://%s/v1/invoice/%s", *lndHost, hex.EncodeToString(hash)),
 		nil,
 	)
 	if err != nil {
@@ -211,7 +207,7 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc, err := url.Parse(fmt.Sprintf(
-		"wss://%s/v2/invoices/subscribe/%s",
+		"ws://%s/v2/invoices/subscribe/%s",
 		*lndHost, base64.URLEncoding.EncodeToString(p.Hash),
 	))
 	if err != nil {
@@ -279,7 +275,7 @@ func cancelWrappedInvoice(hash []byte) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s/v2/invoices/cancel", *lndHost),
+		fmt.Sprintf("http://%s/v2/invoices/cancel", *lndHost),
 		buf,
 	)
 	if err != nil {
@@ -338,7 +334,7 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
-	loc, err := url.Parse(fmt.Sprintf("wss://%s/v2/router/send?method=POST", *lndHost))
+	loc, err := url.Parse(fmt.Sprintf("ws://%s/v2/router/send?method=POST", *lndHost))
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -410,7 +406,7 @@ InFlight:
 	buf := bytes.NewBuffer(params2)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s/v2/invoices/settle", *lndHost),
+		fmt.Sprintf("http://%s/v2/invoices/settle", *lndHost),
 		buf,
 	)
 	if err != nil {
@@ -518,29 +514,7 @@ lnproxy.macaroon
 	}
 	macaroon = hex.EncodeToString(macaroonBytes)
 
-	if *lndNoRestTls {
-		LND = &http.Client{}
-	} else {
-		if strings.HasPrefix(*lndCertPath, "~/") {
-			home, _ := os.UserHomeDir()
-			path := filepath.Join(home, (*lndCertPath)[2:])
-			lndCertPath = &path
-		}
-		lndCert, err := os.ReadFile(*lndCertPath)
-		if err != nil {
-			fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
-			os.Exit(2)
-		}
-
-		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(lndCert)
-		TlsConfig = &tls.Config{RootCAs: caCertPool}
-		LND = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: TlsConfig,
-			},
-		}
-	}
+	LND = &http.Client{}
 
 	http.HandleFunc("/", apiHandler)
 
