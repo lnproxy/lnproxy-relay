@@ -49,6 +49,11 @@ type PaymentRequest struct {
 	DescriptionHash string `json:"description_hash"`
 	NumMsat         int64  `json:"num_msat,string"`
 	CltvExpiry      int64  `json:"cltv_expiry,string"`
+	Features        map[string]struct {
+		Name       string `json:"name"`
+		IsRequired bool   `json:"is_required"`
+		IsKnown    bool   `json:"is_known"`
+	} `json:"features"`
 }
 
 func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
@@ -93,6 +98,16 @@ type WrappedPaymentRequest struct {
 }
 
 func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
+	for flag, feature := range p.Features {
+		switch flag {
+		case "8", "9", "14", "15", "16", "17":
+		default:
+			log.Printf("unhandled feature flag: %s\n\t%v\n", flag, feature)
+			if feature.IsRequired {
+				return nil, fmt.Errorf("Cannot wrap %s invoices", feature.Name)
+			}
+		}
+	}
 	q := WrappedPaymentRequest{}
 	if p.DescriptionHash != "" {
 		description_hash, err := hex.DecodeString(p.DescriptionHash)
@@ -120,8 +135,7 @@ func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
 	}
 	q.CltvExpiry = p.CltvExpiry*CLTV_DELTA_BETA + CLTV_DELTA_ALPHA
 	if q.CltvExpiry >= MAX_CLTV_DELTA {
-		err = fmt.Errorf("cltv_expiry is too long")
-		return nil, err
+		return nil, fmt.Errorf("cltv_expiry is too long")
 	}
 	return &q, nil
 }
@@ -311,11 +325,9 @@ func cancelWrappedInvoice(hash []byte) {
 }
 
 func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_invoice string) {
-	var msat int64
-	if p.ValueMsat > 0 {
-		msat = 0
-	} else {
-		msat = paid_msat - (paid_msat*FEE_PPM)/1_000_000
+	var amt_msat int64
+	if p.ValueMsat == 0 {
+		amt_msat = paid_msat - (paid_msat*FEE_PPM)/1_000_000
 	}
 	params := struct {
 		Invoice           string  `json:"payment_request"`
@@ -323,16 +335,18 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 		TimeoutSeconds    int64   `json:"timeout_seconds"`
 		FeeLimitMsat      int64   `json:"fee_limit_msat,string"`
 		NoInflightUpdates bool    `json:"no_inflight_updates"`
-		TimePref          float64 `json:"time_pref"`
 		CltvLimit         int32   `json:"cltv_limit"`
+		Amp               bool    `json:"amp"`
+		TimePref          float64 `json:"time_pref"`
 	}{
 		Invoice:           original_invoice,
-		AmtMsat:           msat,
+		AmtMsat:           amt_msat,
 		TimeoutSeconds:    p.Expiry - time.Now().Unix(),
 		FeeLimitMsat:      (paid_msat * FEE_PPM) / 1_000_000,
 		NoInflightUpdates: true,
-		TimePref:          0.9,
 		CltvLimit:         int32(p.CltvExpiry - CLTV_DELTA_ALPHA),
+		Amp:               false,
+		TimePref:          0.9,
 	}
 
 	header := http.Header(make(map[string][]string, 1))
@@ -380,10 +394,9 @@ InFlight:
 			return
 		case "UNKNOWN", "IN_FLIGHT":
 			time.Sleep(500 * time.Millisecond)
-			break
 		case "SUCCEEDED":
 			preimage = message.Result.PreImage
-			log.Printf("preimage (%d): %s\n", msat/1000, preimage)
+			log.Printf("preimage (%d): %s\n", paid_msat/1000, preimage)
 			break InFlight
 		default:
 			log.Panicln("Unknown payment status:", message.Result.Status)
@@ -504,11 +517,13 @@ lnproxy.macaroon
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
+
 	flag.Parse()
 	if len(flag.Args()) != 1 {
 		flag.Usage()
 		os.Exit(2)
 	}
+
 	if strings.HasPrefix(*lndCertPath, "~/") {
 		home, _ := os.UserHomeDir()
 		path := filepath.Join(home, (*lndCertPath)[2:])
@@ -519,6 +534,7 @@ lnproxy.macaroon
 		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
 		os.Exit(2)
 	}
+
 	macaroonBytes, err := os.ReadFile(flag.Args()[0])
 	if err != nil {
 		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnproxy macaroon file: %v\n", err)
