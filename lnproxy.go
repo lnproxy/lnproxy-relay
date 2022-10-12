@@ -474,10 +474,6 @@ func wrap(invoice string) (string, error) {
 		return "", err
 	}
 	go watchWrappedInvoice(q, invoice)
-	go func() {
-		time.Sleep(time.Duration(q.Expiry * 1_000_000_000))
-		cancelWrappedInvoice(q.Hash)
-	}()
 	return i, nil
 }
 
@@ -494,7 +490,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	fmt.Fprintf(w, "%s\n", i)
+	fmt.Fprintf(w, "%s", i)
 }
 
 var LND *http.Client
