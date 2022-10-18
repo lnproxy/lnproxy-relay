@@ -35,7 +35,10 @@ var (
 	httpPort      = flag.String("port", "4747", "http port over which to expose api")
 	lndHostString = flag.String("lnd", "https://127.0.0.1:8080", "host for lnd's REST api")
 	lndHost       *url.URL
-	lndCertPath   = flag.String("lnd-cert", ".lnd/tls.cert", "host for lnd's REST api")
+	lndCertPath   = flag.String(
+		"lnd-cert",
+		".lnd/tls.cert",
+		"lnd's self-signed cert (set to empty string for `no-rest-tls=true`)")
 	lndTlsConfig  *tls.Config
 	lndClient     *http.Client
 
