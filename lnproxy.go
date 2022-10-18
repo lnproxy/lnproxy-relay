@@ -225,7 +225,11 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc := *lndHost
-	loc.Scheme = "wss"
+	if loc.Scheme == "https" {
+		loc.Scheme = "wss"
+	} else {
+		loc.Scheme = "ws"
+	}
 	origin := *lndHost
 	origin.Scheme = "http"
 
@@ -347,7 +351,11 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc := *lndHost
-	loc.Scheme = "wss"
+	if loc.Scheme == "https" {
+		loc.Scheme = "wss"
+	} else {
+		loc.Scheme = "ws"
+	}
 	q := url.Values{}
 	q.Set("method", "POST")
 	loc.RawQuery = q.Encode()
@@ -527,15 +535,19 @@ func main() {
 	// If this is not set then websocket errors:
 	lndHost.Path = "/"
 
-	lndCert, err := os.ReadFile(*lndCertPath)
-	if err != nil {
-		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
-		os.Exit(2)
+	if *lndCertPath == "" {
+		lndTlsConfig = &tls.Config{}
+	} else {
+		lndCert, err := os.ReadFile(*lndCertPath)
+		if err != nil {
+			fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
+			os.Exit(2)
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(lndCert)
+		lndTlsConfig = &tls.Config{RootCAs: caCertPool}
 	}
 
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(lndCert)
-	lndTlsConfig = &tls.Config{RootCAs: caCertPool}
 	lndClient = &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: lndTlsConfig,
