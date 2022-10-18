@@ -15,9 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -37,7 +35,7 @@ var (
 	httpPort      = flag.String("port", "4747", "http port over which to expose api")
 	lndHostString = flag.String("lnd", "https://127.0.0.1:8080", "host for lnd's REST api")
 	lndHost       *url.URL
-	lndCertPath   = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
+	lndCertPath   = flag.String("lnd-cert", ".lnd/tls.cert", "host for lnd's REST api")
 	lndTlsConfig  *tls.Config
 	lndClient     *http.Client
 
@@ -529,11 +527,6 @@ func main() {
 	// If this is not set then websocket errors:
 	lndHost.Path = "/"
 
-	if strings.HasPrefix(*lndCertPath, "~/") {
-		home, _ := os.UserHomeDir()
-		path := filepath.Join(home, (*lndCertPath)[2:])
-		lndCertPath = &path
-	}
 	lndCert, err := os.ReadFile(*lndCertPath)
 	if err != nil {
 		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
