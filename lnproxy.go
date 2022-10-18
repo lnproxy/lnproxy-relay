@@ -34,11 +34,12 @@ const (
 )
 
 var (
-	httpPort    = flag.String("port", "4747", "http port over which to expose api")
-	lndHost     = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
-	lndCertPath = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
-	lndCert     []byte
-	macaroon    string
+	httpPort     = flag.String("port", "4747", "http port over which to expose api")
+	lndHost      = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
+	lndCertPath  = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
+	lndTlsConfig *tls.Config
+
+	macaroon string
 )
 
 type PaymentRequest struct {
@@ -237,7 +238,7 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 	ws, err := websocket.DialConfig(&websocket.Config{
 		Location:  loc,
 		Origin:    origin,
-		TlsConfig: TlsConfig,
+		TlsConfig: lndTlsConfig,
 		Header:    header,
 		Version:   13,
 	})
@@ -362,7 +363,7 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 	ws, err := websocket.DialConfig(&websocket.Config{
 		Location:  loc,
 		Origin:    origin,
-		TlsConfig: TlsConfig,
+		TlsConfig: lndTlsConfig,
 		Header:    header,
 		Version:   13,
 	})
@@ -494,7 +495,6 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 var LND *http.Client
-var TlsConfig *tls.Config
 
 func main() {
 	flag.Usage = func() {
@@ -540,10 +540,10 @@ lnproxy.macaroon
 
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(lndCert)
-	TlsConfig = &tls.Config{RootCAs: caCertPool}
+	lndTlsConfig = &tls.Config{RootCAs: caCertPool}
 	LND = &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: TlsConfig,
+			TLSClientConfig: lndTlsConfig,
 		},
 	}
 
