@@ -38,6 +38,7 @@ var (
 	lndHost      = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
 	lndCertPath  = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
 	lndTlsConfig *tls.Config
+	lndClient    *http.Client
 
 	macaroon string
 )
@@ -68,7 +69,7 @@ func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
 
-	resp, err := LND.Do(req)
+	resp, err := lndClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +159,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 		return "", err
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
-	resp, err := LND.Do(req)
+	resp, err := lndClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -197,7 +198,7 @@ func lookupInvoice(hash []byte) (string, error) {
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
 
-	resp, err := LND.Do(req)
+	resp, err := lndClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -300,7 +301,7 @@ func cancelWrappedInvoice(hash []byte) {
 		log.Panicln(err)
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
-	resp, err := LND.Do(req)
+	resp, err := lndClient.Do(req)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -430,7 +431,7 @@ InFlight:
 		log.Panicln(err)
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
-	resp, err := LND.Do(req)
+	resp, err := lndClient.Do(req)
 	if err != nil {
 		log.Panicln(err)
 	}
@@ -494,8 +495,6 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s", i)
 }
 
-var LND *http.Client
-
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon
@@ -541,7 +540,7 @@ lnproxy.macaroon
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(lndCert)
 	lndTlsConfig = &tls.Config{RootCAs: caCertPool}
-	LND = &http.Client{
+	lndClient = &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: lndTlsConfig,
 		},
