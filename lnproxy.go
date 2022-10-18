@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	httpPort    = flag.Int("port", 4747, "http port over which to expose api")
+	httpPort    = flag.String("port", "4747", "http port over which to expose api")
 	lndHost     = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
 	lndCertPath = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
 	lndCert     []byte
@@ -549,5 +549,5 @@ lnproxy.macaroon
 
 	http.HandleFunc("/", apiHandler)
 
-	log.Panicln(http.ListenAndServe(fmt.Sprintf("localhost:%d", *httpPort), nil))
+	log.Panicln(http.ListenAndServe("localhost:"+*httpPort, nil))
 }
