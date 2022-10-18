@@ -34,11 +34,12 @@ const (
 )
 
 var (
-	httpPort     = flag.String("port", "4747", "http port over which to expose api")
-	lndHost      = flag.String("lnd", "127.0.0.1:8080", "REST host for lnd")
-	lndCertPath  = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
-	lndTlsConfig *tls.Config
-	lndClient    *http.Client
+	httpPort      = flag.String("port", "4747", "http port over which to expose api")
+	lndHostString = flag.String("lnd", "https://127.0.0.1:8080", "host for lnd's REST api")
+	lndHost       *url.URL
+	lndCertPath   = flag.String("lnd-cert", "~/.lnd/tls.cert", "host for lnd's REST api")
+	lndTlsConfig  *tls.Config
+	lndClient     *http.Client
 
 	macaroon string
 )
@@ -61,7 +62,7 @@ type PaymentRequest struct {
 func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s/v1/payreq/%s", *lndHost, invoice),
+		lndHost.JoinPath("v1/payreq", invoice).String(),
 		nil,
 	)
 	if err != nil {
@@ -152,7 +153,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s/v2/invoices/hodl", *lndHost),
+		lndHost.JoinPath("v2/invoices/hodl").String(),
 		buf,
 	)
 	if err != nil {
@@ -190,7 +191,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 func lookupInvoice(hash []byte) (string, error) {
 	req, err := http.NewRequest(
 		"GET",
-		fmt.Sprintf("https://%s/v1/invoice/%s", *lndHost, hex.EncodeToString(hash)),
+		lndHost.JoinPath("v1/invoice", hex.EncodeToString(hash)).String(),
 		nil,
 	)
 	if err != nil {
@@ -225,20 +226,14 @@ func lookupInvoice(hash []byte) (string, error) {
 func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
-	loc, err := url.Parse(fmt.Sprintf(
-		"wss://%s/v2/invoices/subscribe/%s",
-		*lndHost, base64.URLEncoding.EncodeToString(p.Hash),
-	))
-	if err != nil {
-		log.Panicln(err)
-	}
-	origin, err := url.Parse("http://" + *lndHost)
-	if err != nil {
-		log.Panicln(err)
-	}
+	loc := *lndHost
+	loc.Scheme = "wss"
+	origin := *lndHost
+	origin.Scheme = "http"
+
 	ws, err := websocket.DialConfig(&websocket.Config{
-		Location:  loc,
-		Origin:    origin,
+		Location:  loc.JoinPath("v2/invoices/subscribe", base64.URLEncoding.EncodeToString(p.Hash)),
+		Origin:    &origin,
 		TlsConfig: lndTlsConfig,
 		Header:    header,
 		Version:   13,
@@ -294,7 +289,7 @@ func cancelWrappedInvoice(hash []byte) {
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s/v2/invoices/cancel", *lndHost),
+		lndHost.JoinPath("v2/invoices/cancel").String(),
 		buf,
 	)
 	if err != nil {
@@ -353,17 +348,17 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
-	loc, err := url.Parse(fmt.Sprintf("wss://%s/v2/router/send?method=POST", *lndHost))
-	if err != nil {
-		log.Panicln(err)
-	}
-	origin, err := url.Parse("http://" + *lndHost)
-	if err != nil {
-		log.Panicln(err)
-	}
+	loc := *lndHost
+	loc.Scheme = "wss"
+	q := url.Values{}
+	q.Set("method", "POST")
+	loc.RawQuery = q.Encode()
+	origin := *lndHost
+	origin.Scheme = "http"
+
 	ws, err := websocket.DialConfig(&websocket.Config{
-		Location:  loc,
-		Origin:    origin,
+		Location:  loc.JoinPath("v2/router/send"),
+		Origin:    &origin,
 		TlsConfig: lndTlsConfig,
 		Header:    header,
 		Version:   13,
@@ -424,7 +419,7 @@ InFlight:
 	buf := bytes.NewBuffer(params2)
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("https://%s/v2/invoices/settle", *lndHost),
+		lndHost.JoinPath("v2/invoices/settle").String(),
 		buf,
 	)
 	if err != nil {
@@ -498,7 +493,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon
-lnproxy.macaroon
+  lnproxy.macaroon
 	Path to lnproxy macaroon. Generate it with:
 		lncli bakemacaroon --save_to lnproxy.macaroon \
 			uri:/lnrpc.Lightning/DecodePayReq \
@@ -519,6 +514,21 @@ lnproxy.macaroon
 		os.Exit(2)
 	}
 
+	macaroonBytes, err := os.ReadFile(flag.Args()[0])
+	if err != nil {
+		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnproxy macaroon file: %v\n", err)
+		os.Exit(2)
+	}
+	macaroon = hex.EncodeToString(macaroonBytes)
+
+	lndHost, err = url.Parse(*lndHostString)
+	if err != nil {
+		fmt.Fprintf(flag.CommandLine.Output(), "Unable to parse lnd host url: %v\n", err)
+		os.Exit(2)
+	}
+	// If this is not set then websocket errors:
+	lndHost.Path = "/"
+
 	if strings.HasPrefix(*lndCertPath, "~/") {
 		home, _ := os.UserHomeDir()
 		path := filepath.Join(home, (*lndCertPath)[2:])
@@ -529,13 +539,6 @@ lnproxy.macaroon
 		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
 		os.Exit(2)
 	}
-
-	macaroonBytes, err := os.ReadFile(flag.Args()[0])
-	if err != nil {
-		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnproxy macaroon file: %v\n", err)
-		os.Exit(2)
-	}
-	macaroon = hex.EncodeToString(macaroonBytes)
 
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(lndCert)
