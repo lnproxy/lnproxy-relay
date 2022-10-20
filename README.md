@@ -2,7 +2,7 @@
 
 ## What
 
-lnproxy takes a bolt 11 invoice and generates a “wrapped” invoice that can be settled *if and only if* the original invoice is settled. The “wrapped” invoice has the same payment hash, expiry, and description, as the invoice it wraps but adds a small routing fee to the amount. The “wrapped” invoice can be used anywhere the original invoice would be used to trustlessly obfuscate the destination of a payment.
+lnproxy takes a bolt 11 invoice and generates a “wrapped” invoice that can be settled *if and only if* the original invoice is settled. The “wrapped” invoice has the same payment hash, expiry, and description, as the invoice it wraps but adds a small routing budget to the amount. The “wrapped” invoice can be used anywhere the original invoice would be used to trustlessly obfuscate the destination of a payment.
 
 ## Why
 
