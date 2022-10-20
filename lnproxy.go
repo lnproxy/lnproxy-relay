@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,17 +15,19 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 
 	"golang.org/x/net/websocket"
 )
 
 const (
-	EXPIRY_BUFFER    = 600
-	FEE_BASE_MSAT    = 1000
-	FEE_PPM          = 6000
-	CLTV_DELTA_ALPHA = 3
-	CLTV_DELTA_BETA  = 6
+	EXPIRY_BUFFER       = 600
+	FEE_BASE_MSAT       = 1000
+	FEE_PPM             = 6000
+	MIN_CUSTOM_FEE_MSAT = 1000
+	CLTV_DELTA_ALPHA    = 3
+	CLTV_DELTA_BETA     = 6
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 	MAX_CLTV_DELTA = 2016
 )
@@ -39,8 +40,8 @@ var (
 		"lnd-cert",
 		".lnd/tls.cert",
 		"lnd's self-signed cert (set to empty string for `no-rest-tls=true`)")
-	lndTlsConfig  *tls.Config
-	lndClient     *http.Client
+	lndTlsConfig *tls.Config
+	lndClient    *http.Client
 
 	macaroon string
 )
@@ -51,7 +52,7 @@ type PaymentRequest struct {
 	Expiry          int64  `json:"expiry,string"`
 	Description     string `json:"description"`
 	DescriptionHash string `json:"description_hash"`
-	NumMsat         int64  `json:"num_msat,string"`
+	NumMsat         uint64 `json:"num_msat,string"`
 	CltvExpiry      int64  `json:"cltv_expiry,string"`
 	Features        map[string]struct {
 		Name       string `json:"name"`
@@ -95,13 +96,13 @@ func decodePaymentRequest(invoice string) (*PaymentRequest, error) {
 type WrappedPaymentRequest struct {
 	Memo            string `json:"memo,omitempty"`
 	Hash            []byte `json:"hash"`
-	ValueMsat       int64  `json:"value_msat,string"`
+	ValueMsat       uint64 `json:"value_msat,string"`
 	DescriptionHash []byte `json:"description_hash,omitempty"`
 	Expiry          int64  `json:"expiry,string"`
 	CltvExpiry      int64  `json:"cltv_expiry,string"`
 }
 
-func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
+func wrapPaymentRequest(p *PaymentRequest, max_fee_msat uint64) (*WrappedPaymentRequest, error) {
 	for flag, feature := range p.Features {
 		switch flag {
 		case "8", "9", "14", "15", "16", "17":
@@ -130,7 +131,11 @@ func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
 	if p.NumMsat == 0 {
 		q.ValueMsat = 0
 	} else {
-		q.ValueMsat = p.NumMsat + (p.NumMsat*FEE_PPM)/1_000_000 + FEE_BASE_MSAT
+		if max_fee_msat == 0 {
+			q.ValueMsat = p.NumMsat + (p.NumMsat*FEE_PPM)/1_000_000 + FEE_BASE_MSAT
+		} else {
+			q.ValueMsat = p.NumMsat + max_fee_msat
+		}
 	}
 	q.Expiry = p.Timestamp + p.Expiry - time.Now().Unix() - EXPIRY_BUFFER
 	if q.Expiry < 0 {
@@ -143,8 +148,6 @@ func wrapPaymentRequest(p *PaymentRequest) (*WrappedPaymentRequest, error) {
 	}
 	return &q, nil
 }
-
-var ErrInvoiceExists = errors.New("Invoice with payment hash already exists")
 
 func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	params, err := json.Marshal(p)
@@ -172,7 +175,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 		dec.Decode(&x)
 		if x, ok := x.(map[string]interface{}); ok {
 			if x["message"] == "invoice with payment hash already exists" {
-				return "", ErrInvoiceExists
+				return "", fmt.Errorf("Wrapped invoice with that payment hash already exists")
 			}
 		}
 		return "", fmt.Errorf("Unknown v2/invoices/hodl error: %#v", x)
@@ -189,42 +192,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	return pr.PaymentRequest, nil
 }
 
-func lookupInvoice(hash []byte) (string, error) {
-	req, err := http.NewRequest(
-		"GET",
-		lndHost.JoinPath("v1/invoice", hex.EncodeToString(hash)).String(),
-		nil,
-	)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
-
-	resp, err := lndClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		var x interface{}
-		dec := json.NewDecoder(resp.Body)
-		dec.Decode(&x)
-		return "", fmt.Errorf("Unknown v1/invoice error: %#v", x)
-	}
-
-	dec := json.NewDecoder(resp.Body)
-	s := struct {
-		PaymentRequest string `json:"payment_request"`
-	}{}
-	err = dec.Decode(&s)
-	if err != nil && err != io.EOF {
-		return "", err
-	}
-
-	return s.PaymentRequest, nil
-}
-
-func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
+func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_fee_msat uint64) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc := *lndHost
@@ -254,7 +222,7 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 		message := struct {
 			Result struct {
 				State       string `json:"state"`
-				AmtPaidMsat int64  `json:"amt_paid_msat,string"`
+				AmtPaidMsat uint64 `json:"amt_paid_msat,string"`
 			} `json:"result"`
 		}{}
 		err = websocket.JSON.Receive(ws, &message)
@@ -266,7 +234,7 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string) {
 		case "OPEN":
 			continue
 		case "ACCEPTED":
-			settleWrappedInvoice(p, message.Result.AmtPaidMsat, original_invoice)
+			settleWrappedInvoice(p, message.Result.AmtPaidMsat, original_invoice, max_fee_msat)
 			return
 		case "SETTLED", "CANCELED":
 			return
@@ -326,16 +294,19 @@ func cancelWrappedInvoice(hash []byte) {
 	}
 }
 
-func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_invoice string) {
-	var amt_msat int64
+func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_invoice string, max_fee_msat uint64) {
+	var amt_msat uint64
+	if max_fee_msat == 0 {
+		max_fee_msat = (paid_msat*FEE_PPM)/1_000_000
+	}
 	if p.ValueMsat == 0 {
-		amt_msat = paid_msat - (paid_msat*FEE_PPM)/1_000_000
+		amt_msat = paid_msat - max_fee_msat
 	}
 	params := struct {
 		Invoice           string  `json:"payment_request"`
-		AmtMsat           int64   `json:"amt_msat,omitempty,string"`
+		AmtMsat           uint64  `json:"amt_msat,omitempty,string"`
 		TimeoutSeconds    int64   `json:"timeout_seconds"`
-		FeeLimitMsat      int64   `json:"fee_limit_msat,string"`
+		FeeLimitMsat      uint64  `json:"fee_limit_msat,string"`
 		NoInflightUpdates bool    `json:"no_inflight_updates"`
 		CltvLimit         int32   `json:"cltv_limit"`
 		Amp               bool    `json:"amp"`
@@ -344,7 +315,7 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat int64, original_in
 		Invoice:           original_invoice,
 		AmtMsat:           amt_msat,
 		TimeoutSeconds:    p.Expiry - time.Now().Unix(),
-		FeeLimitMsat:      (paid_msat * FEE_PPM) / 1_000_000,
+		FeeLimitMsat:      max_fee_msat,
 		NoInflightUpdates: true,
 		CltvLimit:         int32(p.CltvExpiry - CLTV_DELTA_ALPHA),
 		Amp:               false,
@@ -460,26 +431,20 @@ InFlight:
 	}
 }
 
-func wrap(invoice string) (string, error) {
+func wrap(invoice string, max_fee_msat uint64) (string, error) {
 	p, err := decodePaymentRequest(invoice)
 	if err != nil {
 		return "", err
 	}
-	q, err := wrapPaymentRequest(p)
+	q, err := wrapPaymentRequest(p, max_fee_msat)
 	if err != nil {
 		return "", err
 	}
 	i, err := addWrappedInvoice(q)
-	if err == ErrInvoiceExists {
-		i, err = lookupInvoice(q.Hash)
-		if err != nil {
-			return "", err
-		}
-		return i, nil
-	} else if err != nil {
+	if err != nil {
 		return "", err
 	}
-	go watchWrappedInvoice(q, invoice)
+	go watchWrappedInvoice(q, invoice, max_fee_msat)
 	return i, nil
 }
 
@@ -491,7 +456,21 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	i, err := wrap(m[1])
+	var max_fee_msat uint64
+	max_fee_msat_string := r.URL.Query().Get("routing_msat")
+	if max_fee_msat_string != "" {
+		var err error
+		max_fee_msat, err = strconv.ParseUint(max_fee_msat_string, 10, 64)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if max_fee_msat < MIN_CUSTOM_FEE_MSAT {
+			http.Error(w, "Custom routing budget too small", http.StatusBadRequest)
+			return
+		}
+	}
+	i, err := wrap(m[1], max_fee_msat)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
