@@ -26,7 +26,7 @@ const (
 	FEE_BASE_MSAT       = 1000
 	FEE_PPM             = 6000
 	MIN_CUSTOM_FEE_MSAT = 1000
-	MIN_AMOUNT_MSAT = 100000
+	MIN_AMOUNT_MSAT     = 100000
 	CLTV_DELTA_ALPHA    = 3
 	CLTV_DELTA_BETA     = 6
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
@@ -303,7 +303,8 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_i
 	if p.ValueMsat == 0 {
 		amt_msat = paid_msat - max_fee_msat
 		if amt_msat < MIN_AMOUNT_MSAT {
-			log.Panicln(fmt.Errorf("Amount too small"))
+			cancelWrappedInvoice(p.Hash)
+			return
 		}
 	}
 	params := struct {
