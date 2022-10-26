@@ -40,7 +40,7 @@ var (
 	lndCertPath   = flag.String(
 		"lnd-cert",
 		".lnd/tls.cert",
-		"lnd's self-signed cert (set to empty string for `no-rest-tls=true`)")
+		"lnd's self-signed cert (set to empty string for no-rest-tls=true)")
 	lndTlsConfig *tls.Config
 	lndClient    *http.Client
 
