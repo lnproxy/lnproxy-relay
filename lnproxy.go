@@ -22,9 +22,9 @@ import (
 )
 
 const (
-	EXPIRY_BUFFER       = 600
+	EXPIRY_BUFFER       = 300
 	FEE_BASE_MSAT       = 1000
-	FEE_PPM             = 6000
+	FEE_PPM             = 9000
 	MIN_CUSTOM_FEE_MSAT = 1000
 	MIN_AMOUNT_MSAT     = 100000
 	CLTV_DELTA_ALPHA    = 3
@@ -213,11 +213,13 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_
 		Version:   13,
 	})
 	if err != nil {
-		log.Panicln(err)
+		log.Println("Error while subscribing to invoice:", p, err)
+		return
 	}
 	err = websocket.JSON.Send(ws, struct{}{})
 	if err != nil {
-		log.Panicln(err)
+		log.Println("Error while subscribing to invoice:", p, err)
+		return
 	}
 	for {
 		message := struct {
@@ -228,7 +230,8 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_
 		}{}
 		err = websocket.JSON.Receive(ws, &message)
 		if err != nil && err != io.EOF {
-			log.Panicln(err)
+			log.Println("Error while reading from invoice status lnd socket:", p, err)
+			return
 		}
 
 		switch message.Result.State {
@@ -238,28 +241,28 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_
 			settleWrappedInvoice(p, message.Result.AmtPaidMsat, original_invoice, max_fee_msat)
 			return
 		case "SETTLED", "CANCELED":
+			log.Printf("Invoice %s before payment.\n", message.Result.State)
 			return
 		default:
-			log.Panicln("Unknown invoice status")
+			log.Printf("Unknown invoice status: %s\n", message.Result.State)
+			return
 		}
 
 		if err == io.EOF {
-			log.Panicln("Unexpected EOF while watching invoice")
+			log.Println("Unexpected EOF while watching invoice:", p)
+			return
 		}
 	}
 }
 
 func cancelWrappedInvoice(hash []byte) {
-	params, err := json.Marshal(
+	params, _ := json.Marshal(
 		struct {
 			PaymentHash []byte `json:"payment_hash"`
 		}{
 			PaymentHash: hash,
 		},
 	)
-	if err != nil {
-		log.Panicln(err)
-	}
 	buf := bytes.NewBuffer(params)
 	req, err := http.NewRequest(
 		"POST",
@@ -267,31 +270,30 @@ func cancelWrappedInvoice(hash []byte) {
 		buf,
 	)
 	if err != nil {
-		log.Panicln(err)
+		log.Println("Error while canceling invoice:", hash, err)
+		return
 	}
 	req.Header.Add("Grpc-Metadata-macaroon", macaroon)
 	resp, err := lndClient.Do(req)
 	if err != nil {
-		log.Panicln(err)
+		log.Println("Error while canceling invoice:", hash, err)
+		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		var x interface{}
 		dec := json.NewDecoder(resp.Body)
 		dec.Decode(&x)
-		log.Panicln(fmt.Errorf("Unknown v2/invoices/cancel error: %#v", x))
+		log.Println("Unknown v2/invoices/cancel error:", x)
+		return
 	}
 	dec := json.NewDecoder(resp.Body)
 	var x interface{}
 	if err := dec.Decode(&x); err != nil && err != io.EOF {
-		log.Panicln(err)
+		log.Println("Unknown v2/invoices/cancel error:", err)
 	}
-	if x, ok := x.(map[string]interface{}); ok {
-		if len(x) != 0 {
-			log.Panicln(err)
-		}
-	} else {
-		log.Panicln(fmt.Errorf("Unknown v2/invoices/cancel response: %#v", x))
+	if xmap, ok := x.(map[string]interface{}); !ok || len(xmap) != 0 {
+		log.Println("Unknown v2/invoices/cancel response:", x)
 	}
 }
 
@@ -349,15 +351,18 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_i
 		Version:   13,
 	})
 	if err != nil {
-		log.Panicln(err)
+		log.Println("Error while dialing socket for payment status:", p, err)
+		return
 	}
 
 	err = websocket.JSON.Send(ws, params)
 	if err != nil {
-		log.Panicln(err)
+		log.Println("Error while dialing socket for payment status:", p, err)
+		return
 	}
 
 	var preimage string
+
 InFlight:
 	for {
 		message := struct {
@@ -368,8 +373,10 @@ InFlight:
 		}{}
 		err = websocket.JSON.Receive(ws, &message)
 		if err != nil && err != io.EOF {
-			log.Panicln(err)
+			log.Println("Error while receiving from socket for payment status:", p, err)
+			return
 		}
+
 		switch message.Result.Status {
 		case "FAILED":
 			cancelWrappedInvoice(p.Hash)
@@ -381,17 +388,18 @@ InFlight:
 			log.Printf("preimage (%d): %s\n", paid_msat/1000, preimage)
 			break InFlight
 		default:
-			log.Panicln("Unknown payment status:", message.Result.Status)
+			log.Println("Unknown payment status:", message.Result.Status, p)
 		}
 
 		if err == io.EOF {
-			log.Panicln("Unexpected EOF while watching invoice")
+			log.Println("Unexpected EOF while watching invoice")
+			continue
 		}
 	}
 
 	preimage2, err := hex.DecodeString(preimage)
 	if err != nil {
-		log.Panicln(err)
+		log.Panicln("Error decoding preimage", err)
 	}
 	params2, err := json.Marshal(struct {
 		PreImage []byte `json:"preimage"`
@@ -425,14 +433,11 @@ InFlight:
 	dec := json.NewDecoder(resp.Body)
 
 	var x interface{}
-	dec = json.NewDecoder(resp.Body)
-	dec.Decode(&x)
-	if x, ok := x.(map[string]interface{}); ok {
-		if len(x) != 0 {
-			log.Panicln(fmt.Errorf("Unknown v2/invoices/settle response: %#v", x))
-		}
-	} else {
-		log.Panicln(fmt.Errorf("Unknown v2/invoices/settle response: %#v", x))
+	if err := dec.Decode(&x); err != nil && err != io.EOF {
+		log.Panicln(err)
+	}
+	if xmap, ok := x.(map[string]interface{}); !ok || len(xmap) != 0 {
+		log.Println(fmt.Errorf("Unknown v2/invoices/settle response: %#v", x))
 	}
 }
 
@@ -453,7 +458,7 @@ func wrap(invoice string, max_fee_msat uint64) (string, error) {
 	return i, nil
 }
 
-var validPath = regexp.MustCompile("^/(lnbc[a-z0-9]+)$")
+var validPath = regexp.MustCompile("^/api/(lnbc.*1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)")
 
 func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -463,13 +468,14 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
 	var max_fee_msat uint64
 	max_fee_msat_string := r.URL.Query().Get("routing_msat")
 	if max_fee_msat_string != "" {
 		var err error
 		max_fee_msat, err = strconv.ParseUint(max_fee_msat_string, 10, 64)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Invalid custom routing budget", http.StatusBadRequest)
 			return
 		}
 		if max_fee_msat < MIN_CUSTOM_FEE_MSAT {
@@ -483,6 +489,109 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprintf(w, "%s", i)
+}
+
+func specApiHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+
+	var x map[string]interface{}
+	err := json.NewDecoder(r.Body).Decode(&x)
+	if err != nil {
+		log.Println("Body is not JSON object", err)
+		json.NewEncoder(w).Encode(makeJsonError("Body is not JSON object"))
+		return
+	}
+	invoice, ok := x["invoice"]
+	if !ok {
+		json.NewEncoder(w).Encode(makeJsonError("Body needs an invoice field"))
+		return
+	}
+	invoice_string, ok := invoice.(string)
+	if !ok {
+		json.NewEncoder(w).Encode(makeJsonError("Invoice field must be a string"))
+		return
+	}
+
+	p, err := decodePaymentRequest(invoice_string)
+	if err != nil {
+		log.Println("Invalid invoice", err)
+		json.NewEncoder(w).Encode(makeJsonError("Invalid invoice"))
+		return
+	}
+
+	var max_fee_msat uint64
+	if routing_msat, ok := x["routing_msat"]; ok {
+		routing_msat_string, ok := routing_msat.(string)
+		if !ok {
+			json.NewEncoder(w).Encode(makeJsonError("Routing budget field must be a string"))
+			return
+		}
+		max_fee_msat, err = strconv.ParseUint(routing_msat_string, 10, 64)
+		if err != nil {
+			json.NewEncoder(w).Encode(makeJsonError("Invalid routing budget"))
+			return
+		}
+		if max_fee_msat < MIN_CUSTOM_FEE_MSAT {
+			json.NewEncoder(w).Encode(makeJsonError("Routing budget too small"))
+			return
+		}
+	}
+
+	if description, ok := x["description"]; ok {
+		description_string, ok := description.(string)
+		if !ok {
+			json.NewEncoder(w).Encode(makeJsonError("Description field must be a string"))
+			return
+		}
+		p.Description = description_string
+		p.DescriptionHash = ""
+	}
+
+	if description_hash, ok := x["description_hash"]; ok {
+		description_hash_string, ok := description_hash.(string)
+		if !ok {
+			json.NewEncoder(w).Encode(makeJsonError("Description hash field must be a string"))
+			return
+		}
+		p.DescriptionHash = description_hash_string
+		p.Description = ""
+	}
+
+	q, err := wrapPaymentRequest(p, max_fee_msat)
+	if err != nil {
+		log.Println("Error while wrapping", err)
+		json.NewEncoder(w).Encode(makeJsonError("Internal error"))
+		return
+	}
+
+	wrapped_invoice, err := addWrappedInvoice(q)
+	if err != nil {
+		log.Println("Error while adding wrapped", err)
+		json.NewEncoder(w).Encode(makeJsonError("Internal error"))
+		return
+	}
+
+	go watchWrappedInvoice(q, invoice_string, max_fee_msat)
+
+	json.NewEncoder(w).Encode(struct {
+		WrappedInvoice string `json:"wrapped_invoice"`
+	}{
+		WrappedInvoice: wrapped_invoice,
+	})
+
+}
+
+type JsonError struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+func makeJsonError(reason string) JsonError {
+	return JsonError{
+		Status: "ERROR",
+		Reason: reason,
+	}
 }
 
 func main() {
@@ -543,7 +652,8 @@ func main() {
 		},
 	}
 
-	http.HandleFunc("/", apiHandler)
+	http.HandleFunc("/spec", specApiHandler)
+	http.HandleFunc("/api/", apiHandler)
 
-	log.Panicln(http.ListenAndServe("localhost:"+*httpPort, nil))
+	log.Fatalln(http.ListenAndServe("localhost:"+*httpPort, nil))
 }
