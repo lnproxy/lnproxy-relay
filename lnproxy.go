@@ -498,7 +498,8 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	var x map[string]interface{}
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
-		log.Println("Body is not JSON object", err)
+		b, _ := io.ReadAll(r.Body)
+		log.Println("Body is not JSON object:", b)
 		json.NewEncoder(w).Encode(makeJsonError("Body is not JSON object"))
 		return
 	}
@@ -575,7 +576,7 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	go watchWrappedInvoice(q, invoice_string, max_fee_msat)
 
 	json.NewEncoder(w).Encode(struct {
-		WrappedInvoice string `json:"wrapped_invoice"`
+		WrappedInvoice string `json:"proxy_invoice"`
 	}{
 		WrappedInvoice: wrapped_invoice,
 	})
