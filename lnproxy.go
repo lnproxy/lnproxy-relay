@@ -635,7 +635,7 @@ func main() {
 	lndHost.Path = "/"
 
 	if *lndCertPath == "" {
-		lndTlsConfig = &tls.Config{}
+		lndTlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	} else {
 		lndCert, err := os.ReadFile(*lndCertPath)
 		if err != nil {
@@ -644,7 +644,7 @@ func main() {
 		}
 		caCertPool := x509.NewCertPool()
 		caCertPool.AppendCertsFromPEM(lndCert)
-		lndTlsConfig = &tls.Config{RootCAs: caCertPool}
+		lndTlsConfig = &tls.Config{RootCAs: caCertPool, MinVersion: tls.VersionTLS12}
 	}
 
 	lndClient = &http.Client{
