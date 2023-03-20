@@ -1,3 +1,6 @@
+# WARNING:
+# Not an expert on Docker, use this at your own risk:
+
 FROM cgr.dev/chainguard/go:1.19 as build
 
 WORKDIR /src
