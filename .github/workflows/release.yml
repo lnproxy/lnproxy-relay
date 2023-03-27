@@ -20,12 +20,9 @@ jobs:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
     steps:
       - uses: actions/checkout@v3
-<<<<<<< HEAD
-
+      
       - name: Run Gosec Security Scanner
         uses: securego/gosec@master
-=======
->>>>>>> 8ef2804a39ec49deee56a15eee41c1b42488ae74
       
       - name: Unshallow
         run: git fetch --prune --unshallow
@@ -40,9 +37,4 @@ jobs:
           version: latest
           args: release --clean
         env:
-<<<<<<< HEAD
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-=======
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
->>>>>>> 8ef2804a39ec49deee56a15eee41c1b42488ae74
