@@ -20,6 +20,9 @@ jobs:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
     steps:
       - uses: actions/checkout@v3
+
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
       
       - name: Unshallow
         run: git fetch --prune --unshallow
