@@ -10,6 +10,7 @@ permissions:
   id-token: write
   packages: write
   issues: write
+  security-events: write
 
 jobs:
   goreleaser:
