@@ -12,16 +12,15 @@ permissions:
   issues: write
   security-events: write
 
-jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
-    env:
+env:
       GO111MODULE: on
       CGO_ENABLED: 0
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
-    steps:
-      - uses: actions/checkout@v3
 
+jobs:
+  gosecscanner:
+    runs-on: ubuntu-latest
+    steps:
       - name: Run Gosec Security Scanner
         uses: securego/gosec@master
         with:
@@ -31,18 +30,17 @@ jobs:
         with:
           sarif_file: results.sarif
 
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
       - name: Unshallow
         run: git fetch --prune --unshallow
         
       - uses: actions/setup-go@v4
         with:
           go-version: 1.19
-
-      - name: Add sarif file to .gitignore
-        run: echo "results.sarif" >> .gitignore
-
-      - name: Listing file 
-        run: ls -la 
 
       - uses: goreleaser/goreleaser-action@v4
         with:
