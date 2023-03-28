@@ -39,7 +39,7 @@ jobs:
           go-version: 1.19
 
       - name: Add sarif file to .gitignore
-        run: echo results.sarif >> .gitignore
+        run: echo "results.sarif" >> .gitignore
 
       - name: Listing file 
         run: ls -la 
