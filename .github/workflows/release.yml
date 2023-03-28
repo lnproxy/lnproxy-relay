@@ -49,3 +49,6 @@ jobs:
       - name: Listing file 
         run: ls -la 
 
+      - name: Add sarif file to .gitignore
+        run: echo results.sarif >> .gitignore
+
