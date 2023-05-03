@@ -321,7 +321,7 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_i
 	}{
 		Invoice:           original_invoice,
 		AmtMsat:           amt_msat,
-		TimeoutSeconds:    p.Expiry - time.Now().Unix(),
+		TimeoutSeconds:    p.Expiry,
 		FeeLimitMsat:      max_fee_msat,
 		NoInflightUpdates: true,
 		CltvLimit:         int32(p.CltvExpiry - CLTV_DELTA_ALPHA),
