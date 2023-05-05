@@ -381,7 +381,7 @@ InFlight:
 		case "FAILED":
 			cancelWrappedInvoice(p.Hash)
 			return
-		case "UNKNOWN", "IN_FLIGHT":
+		case "UNKNOWN", "IN_FLIGHT", "":
 			time.Sleep(500 * time.Millisecond)
 		case "SUCCEEDED":
 			preimage = message.Result.PreImage
