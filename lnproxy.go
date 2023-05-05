@@ -31,6 +31,8 @@ const (
 	CLTV_DELTA_BETA     = 6
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 	MAX_CLTV_DELTA = 2016
+	// Should be set so that CLTV_DELTA_ALPHA blocks are very unlikely to be added before timeout
+	PAYMENT_TIMEOUT = 120
 )
 
 var (
@@ -321,7 +323,7 @@ func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_i
 	}{
 		Invoice:           original_invoice,
 		AmtMsat:           amt_msat,
-		TimeoutSeconds:    p.Expiry,
+		TimeoutSeconds:    PAYMENT_TIMEOUT,
 		FeeLimitMsat:      max_fee_msat,
 		NoInflightUpdates: true,
 		CltvLimit:         int32(p.CltvExpiry - CLTV_DELTA_ALPHA),
