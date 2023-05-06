@@ -25,6 +25,7 @@ const (
 	EXPIRY_BUFFER       = 300
 	FEE_BASE_MSAT       = 1000
 	FEE_PPM             = 9000
+	SERVICE_FEE_MSAT    = 0
 	MIN_CUSTOM_FEE_MSAT = 1000
 	MIN_AMOUNT_MSAT     = 100000
 	CLTV_DELTA_ALPHA    = 3
@@ -103,7 +104,7 @@ type WrappedPaymentRequest struct {
 	CltvExpiry      int64  `json:"cltv_expiry,string"`
 }
 
-func wrapPaymentRequest(p *PaymentRequest, max_fee_msat uint64) (*WrappedPaymentRequest, error) {
+func wrapPaymentRequest(p *PaymentRequest, max_fee_msat uint64, service_fee_msat uint64) (*WrappedPaymentRequest, error) {
 	for flag, feature := range p.Features {
 		switch flag {
 		case "8", "9", "14", "15", "16", "17":
@@ -138,6 +139,9 @@ func wrapPaymentRequest(p *PaymentRequest, max_fee_msat uint64) (*WrappedPayment
 			q.ValueMsat = p.NumMsat + max_fee_msat
 		}
 	}
+
+	q.ValueMsat += service_fee_msat
+
 	q.Expiry = p.Timestamp + p.Expiry - time.Now().Unix() - EXPIRY_BUFFER
 	if q.Expiry < 0 {
 		err = fmt.Errorf("Payment request expiration is too close.")
@@ -193,7 +197,7 @@ func addWrappedInvoice(p *WrappedPaymentRequest) (string, error) {
 	return pr.PaymentRequest, nil
 }
 
-func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_fee_msat uint64) {
+func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_fee_msat uint64, service_fee_msat uint64) {
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", macaroon)
 	loc := *lndHost
@@ -238,7 +242,7 @@ func watchWrappedInvoice(p *WrappedPaymentRequest, original_invoice string, max_
 		case "OPEN":
 			continue
 		case "ACCEPTED":
-			settleWrappedInvoice(p, message.Result.AmtPaidMsat, original_invoice, max_fee_msat)
+			settleWrappedInvoice(p, message.Result.AmtPaidMsat, original_invoice, max_fee_msat, service_fee_msat)
 			return
 		case "SETTLED", "CANCELED":
 			log.Printf("Invoice %s before payment.\n", message.Result.State)
@@ -297,13 +301,13 @@ func cancelWrappedInvoice(hash []byte) {
 	}
 }
 
-func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_invoice string, max_fee_msat uint64) {
+func settleWrappedInvoice(p *WrappedPaymentRequest, paid_msat uint64, original_invoice string, max_fee_msat uint64, service_fee_msat uint64) {
 	var amt_msat uint64
 	if max_fee_msat == 0 {
 		max_fee_msat = (paid_msat * FEE_PPM) / 1_000_000
 	}
 	if p.ValueMsat == 0 {
-		amt_msat = paid_msat - max_fee_msat
+		amt_msat = paid_msat - max_fee_msat - service_fee_msat
 		if amt_msat < MIN_AMOUNT_MSAT {
 			cancelWrappedInvoice(p.Hash)
 			return
@@ -441,12 +445,12 @@ InFlight:
 	}
 }
 
-func wrap(invoice string, max_fee_msat uint64) (string, error) {
+func wrap(invoice string, max_fee_msat uint64, service_fee_msat uint64) (string, error) {
 	p, err := decodePaymentRequest(invoice)
 	if err != nil {
 		return "", err
 	}
-	q, err := wrapPaymentRequest(p, max_fee_msat)
+	q, err := wrapPaymentRequest(p, max_fee_msat, service_fee_msat)
 	if err != nil {
 		return "", err
 	}
@@ -454,7 +458,7 @@ func wrap(invoice string, max_fee_msat uint64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	go watchWrappedInvoice(q, invoice, max_fee_msat)
+	go watchWrappedInvoice(q, invoice, max_fee_msat, service_fee_msat)
 	return i, nil
 }
 
@@ -470,7 +474,9 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var max_fee_msat uint64
+	var service_fee_msat uint64
 	max_fee_msat_string := r.URL.Query().Get("routing_msat")
+	service_fee_msat_string := r.URL.Query().Get("service_fee_msat")
 	if max_fee_msat_string != "" {
 		var err error
 		max_fee_msat, err = strconv.ParseUint(max_fee_msat_string, 10, 64)
@@ -483,7 +489,17 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	i, err := wrap(m[1], max_fee_msat)
+	if service_fee_msat_string != "" {
+		var err error
+		service_fee_msat, err = strconv.ParseUint(service_fee_msat_string, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid service fee", http.StatusBadRequest)
+			return
+		}
+	} else {
+		service_fee_msat = SERVICE_FEE_MSAT
+	}
+	i, err := wrap(m[1], max_fee_msat, service_fee_msat)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -539,6 +555,20 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var service_fee_msat uint64
+	if service_fee_msat, ok := x["service_fee_msat"]; ok {
+		service_fee_msat_string, ok := service_fee_msat.(string)
+		if !ok {
+			json.NewEncoder(w).Encode(makeJsonError("Service fee must be a string"))
+			return
+		}
+		service_fee_msat, err = strconv.ParseUint(service_fee_msat_string, 10, 64)
+		if err != nil {
+			json.NewEncoder(w).Encode(makeJsonError("Invalid service fee"))
+			return
+		}
+	}
+
 	if description, ok := x["description"]; ok {
 		description_string, ok := description.(string)
 		if !ok {
@@ -559,7 +589,7 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 		p.Description = ""
 	}
 
-	q, err := wrapPaymentRequest(p, max_fee_msat)
+	q, err := wrapPaymentRequest(p, max_fee_msat, service_fee_msat)
 	if err != nil {
 		log.Println("Error while wrapping", err)
 		json.NewEncoder(w).Encode(makeJsonError("Internal error"))
@@ -573,7 +603,7 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go watchWrappedInvoice(q, invoice_string, max_fee_msat)
+	go watchWrappedInvoice(q, invoice_string, max_fee_msat, service_fee_msat)
 
 	json.NewEncoder(w).Encode(struct {
 		WrappedInvoice string `json:"proxy_invoice"`
