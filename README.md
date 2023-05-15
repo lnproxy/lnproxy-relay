@@ -26,7 +26,10 @@ This little binary uses the lnd REST API to handle lightning things so running i
 
 The more nodes run an api server, the more censorship resistant the project will be.
 It's easy, just
-- build the lnproxy binary (prebuilt releases coming soon), 
+- build the lnproxy binary (prebuilt releases coming soon):
+  ```
+    cd relay && go build
+  ```
 - generate a macaroon with minimal permissions for lnproxy to use:
   ```
     lncli bakemacaroon --save_to lnproxy.macaroon \
@@ -38,10 +41,14 @@ It's easy, just
       uri:/invoicesrpc.Invoices/SettleInvoice \
       uri:/routerrpc.Router/SendPaymentV2
   ```
-- run: `./lnproxy lnproxy.macaroon`
+- run: `./relay lnproxy.macaroon`
 - on a separate terminal:
   ```
-    curl http://localhost:4747/api/{your invoice}?routing_msat={routing budget}
+    curl -s --header "Content-Type: application/json" \
+      --request POST \
+      --data '{"invoice":"<bolt11 invoice>"}' \
+      http://localhost:4747/spec
   ```
 
-Once you've played with it a bit and set up tls or a tor hidden service for your api server, send me a message so I can add you to the gateway at https://lnproxy.org.
+Once you've played with it a bit and set up tls or a tor hidden service for your api server,
+make a PR to add your url to: https://github.com/lnproxy/lnproxy-webui2/blob/main/assets/relays.json
