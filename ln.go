@@ -1,5 +1,9 @@
 package lnproxy
 
+import "errors"
+
+var PaymentHashExists = errors.New("invoice with that payment hash already exists")
+
 type LN interface {
 	DecodeInvoice(string) (*DecodedInvoice, error)
 	AddInvoice(InvoiceParameters) (string, error)
@@ -34,12 +38,9 @@ type InvoiceParameters struct {
 }
 
 type PaymentParameters struct {
-	Invoice           string  `json:"payment_request"`
-	AmtMsat           uint64  `json:"amt_msat,omitempty,string"`
-	TimeoutSeconds    uint64  `json:"timeout_seconds"`
-	FeeLimitMsat      uint64  `json:"fee_limit_msat,string"`
-	NoInflightUpdates bool    `json:"no_inflight_updates"`
-	CltvLimit         uint64  `json:"cltv_limit"`
-	Amp               bool    `json:"amp"`
-	TimePref          float64 `json:"time_pref"`
+	Invoice        string `json:"payment_request"`
+	AmtMsat        uint64 `json:"amt_msat,omitempty,string"`
+	TimeoutSeconds uint64 `json:"timeout_seconds"`
+	FeeLimitMsat   uint64 `json:"fee_limit_msat,string"`
+	CltvLimit      uint64 `json:"cltv_limit"`
 }

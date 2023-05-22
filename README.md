@@ -28,7 +28,7 @@ The more nodes run an api server, the more censorship resistant the project will
 It's easy, just
 - build the lnproxy binary (prebuilt releases coming soon):
   ```
-    cd relay && go build
+    cd cmd/http-relay && go build
   ```
 - generate a macaroon with minimal permissions for lnproxy to use:
   ```

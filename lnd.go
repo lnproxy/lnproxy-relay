@@ -42,8 +42,11 @@ func (lnd *Lnd) DecodeInvoice(invoice string) (*DecodedInvoice, error) {
 	if resp.StatusCode != http.StatusOK {
 		var x interface{}
 		dec := json.NewDecoder(resp.Body)
-		dec.Decode(&x)
-		return nil, fmt.Errorf("Unknown v1/payreq error: %#v", x)
+		err = dec.Decode(&x)
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("v1/payreq response: %#v", x)
 	}
 
 	dec := json.NewDecoder(resp.Body)
@@ -78,13 +81,16 @@ func (lnd *Lnd) AddInvoice(p InvoiceParameters) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		var x interface{}
 		dec := json.NewDecoder(resp.Body)
-		dec.Decode(&x)
+		err = dec.Decode(&x)
+		if err != nil {
+			return "", err
+		}
 		if x, ok := x.(map[string]interface{}); ok {
 			if x["message"] == "invoice with payment hash already exists" {
-				return "", fmt.Errorf("Wrapped invoice with that payment hash already exists")
+				return "", PaymentHashExists
 			}
 		}
-		return "", fmt.Errorf("Unknown v2/invoices/hodl error: %#v", x)
+		return "", fmt.Errorf("v2/invoices/hodl  response: %#v", x)
 	}
 	dec := json.NewDecoder(resp.Body)
 	pr := struct {
@@ -94,7 +100,6 @@ func (lnd *Lnd) AddInvoice(p InvoiceParameters) (string, error) {
 	if err != nil && err != io.EOF {
 		return "", err
 	}
-
 	return pr.PaymentRequest, nil
 }
 
@@ -120,6 +125,7 @@ func (lnd *Lnd) WatchInvoice(hash []byte) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer ws.Close()
 	err = websocket.JSON.Send(ws, struct{}{})
 	if err != nil {
 		return 0, err
@@ -130,23 +136,32 @@ func (lnd *Lnd) WatchInvoice(hash []byte) (uint64, error) {
 				State       string `json:"state"`
 				AmtPaidMsat uint64 `json:"amt_paid_msat,string"`
 			} `json:"result"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}{}
 		err = websocket.JSON.Receive(ws, &message)
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
+		if message.Error.Message != "" {
+			return 0, fmt.Errorf("v2/invoices/subscribe response: %s", message.Error.Message)
+		}
 
 		switch message.Result.State {
 		case "OPEN":
-			continue
+			time.Sleep(500 * time.Millisecond)
 		case "ACCEPTED":
 			return message.Result.AmtPaidMsat, nil
 		case "SETTLED", "CANCELED":
-			return 0, fmt.Errorf("Invoice %s before payment.\n", message.Result.State)
+			return message.Result.AmtPaidMsat, fmt.Errorf("invoice %s before payment", message.Result.State)
 		default:
-			return 0, fmt.Errorf("Unknown invoice status %s.\n", message.Result.State)
+			return 0, fmt.Errorf("v2/invoices/subscribe unhandled state: %s", message.Result.State)
 		}
 
+		if err == io.EOF {
+			return 0, err
+		}
 	}
 }
 
@@ -173,25 +188,24 @@ func (lnd *Lnd) CancelInvoice(hash []byte) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		var x interface{}
-		dec := json.NewDecoder(resp.Body)
-		dec.Decode(&x)
-		return fmt.Errorf("Unknown v2/invoices/cancel error: %v\n", x)
-	}
-	dec := json.NewDecoder(resp.Body)
+
 	var x interface{}
-	if err := dec.Decode(&x); err != nil && err != io.EOF {
-		return fmt.Errorf("Unknown v2/invoices/cancel error: %v\n", err)
+	dec := json.NewDecoder(resp.Body)
+	err = dec.Decode(&x)
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("v2/invoices/cancel response: %v\n", x)
 	}
 	if xmap, ok := x.(map[string]interface{}); !ok || len(xmap) != 0 {
-		return fmt.Errorf("Unknown v2/invoices/cancel response: %v", x)
+		return fmt.Errorf("v2/invoices/cancel unhandled response: %v\n", x)
 	}
+
 	return nil
 }
 
 func (lnd *Lnd) PayInvoice(params PaymentParameters) ([]byte, error) {
-
 	header := http.Header(make(map[string][]string, 1))
 	header.Add("Grpc-Metadata-Macaroon", lnd.Macaroon)
 	loc := *lnd.Host
@@ -216,21 +230,38 @@ func (lnd *Lnd) PayInvoice(params PaymentParameters) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = websocket.JSON.Send(ws, params)
+	defer ws.Close()
+	err = websocket.JSON.Send(ws, struct {
+		PaymentParameters
+		NoInflightUpdates bool    `json:"no_inflight_updates"`
+		Amp               bool    `json:"amp"`
+		TimePref          float64 `json:"time_pref"`
+	}{
+		PaymentParameters: params,
+		NoInflightUpdates: true,
+		Amp:               false,
+		TimePref:          0.9,
+	})
 	if err != nil {
 		return nil, err
 	}
-
 	for {
 		message := struct {
 			Result struct {
-				Status   string `json:"status"`
-				PreImage string `json:"payment_preimage"`
+				Status        string `json:"status"`
+				PreImage      string `json:"payment_preimage"`
+				FailureReason string `json:"failure_reason"`
 			} `json:"result"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}{}
 		err = websocket.JSON.Receive(ws, &message)
 		if err != nil && err != io.EOF {
 			return nil, err
+		}
+		if message.Error.Message != "" {
+			return nil, fmt.Errorf("v2/router/send response: %s", message.Error.Message)
 		}
 
 		switch message.Result.Status {
@@ -246,12 +277,11 @@ func (lnd *Lnd) PayInvoice(params PaymentParameters) ([]byte, error) {
 			}
 			return preimage, nil
 		default:
-			log.Println("Unknown payment status:", message.Result.Status, params)
+			return nil, fmt.Errorf("v2/router/send unhandled status: %s", message.Result.Status)
 		}
 
 		if err == io.EOF {
-			log.Println("Unexpected EOF while watching invoice")
-			continue
+			return nil, err
 		}
 	}
 }
@@ -280,20 +310,18 @@ func (lnd *Lnd) SettleInvoice(preimage []byte) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		var x interface{}
-		dec := json.NewDecoder(resp.Body)
-		dec.Decode(&x)
-		return fmt.Errorf("Unknown v2/invoices/settle error: %#v", x)
-	}
-	dec := json.NewDecoder(resp.Body)
 
 	var x interface{}
-	if err := dec.Decode(&x); err != nil && err != io.EOF {
+	dec := json.NewDecoder(resp.Body)
+	err = dec.Decode(&x)
+	if err != nil && err != io.EOF {
 		return err
 	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("v2/invoices/settle response: %#v", x)
+	}
 	if xmap, ok := x.(map[string]interface{}); !ok || len(xmap) != 0 {
-		return fmt.Errorf("Unknown v2/invoices/settle response: %#v", x)
+		return fmt.Errorf("v2/invoices/settle unhandled response: %#v", x)
 	}
 	return nil
 }

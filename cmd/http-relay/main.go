@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/lnproxy/lnproxy"
 )
@@ -28,18 +29,19 @@ var (
 		RoutingFeeBaseMsat:       100,
 		RoutingFeePPM:            1000,
 		CltvDeltaAlpha:           3,
-		CltvDeltaBeta:            6,
+		CltvDeltaBeta:            4,
 		// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
-		MaxCltvDelta: 2016,
+		MaxCltvDelta: 1800,
+		MinCltvDelta: 120,
 		// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
 		PaymentTimeout:        120,
 		PaymentTimePreference: 0.9,
 	}
 
 	lnd *lnproxy.Lnd
-)
 
-var validPath = regexp.MustCompile("^/api/(lnbc.*1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)")
+	validPath = regexp.MustCompile("^/api/(lnbc.*1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)")
+)
 
 func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -60,9 +62,13 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		x.RoutingMsat.Set(routing_msat)
 	}
+
 	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if errors.Is(err, lnproxy.ClientFacing) {
+		http.Error(w, strings.TrimSpace(err.Error()), http.StatusInternalServerError)
+		return
+	} else if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	fmt.Fprintf(w, "%s", proxy_invoice)
@@ -71,8 +77,6 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
-
-	log.Println("hi")
 
 	x := lnproxy.ProxyParameters{}
 	err := json.NewDecoder(r.Body).Decode(&x)
@@ -83,13 +87,11 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
-	if err != nil {
-		log.Println("Error encountered in lnproxy.Relay:", err)
-		if errors.Is(err, lnproxy.InternalError) {
-			json.NewEncoder(w).Encode(makeJsonError("Internal relay error"))
-		} else {
-			json.NewEncoder(w).Encode(makeJsonError(err.Error()))
-		}
+	if errors.Is(err, lnproxy.ClientFacing) {
+		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
+		return
+	} else if err != nil {
+		json.NewEncoder(w).Encode(makeJsonError("Internal relay error"))
 		return
 	}
 
@@ -98,7 +100,6 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	}{
 		WrappedInvoice: proxy_invoice,
 	})
-
 }
 
 type JsonError struct {

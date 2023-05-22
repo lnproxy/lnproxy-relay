@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 	"strconv"
+	"time"
 )
+
+var ClientFacing = errors.New("")
 
 type RelayParameters struct {
 	MinAmountMsat            uint64
@@ -22,6 +24,7 @@ type RelayParameters struct {
 	CltvDeltaBeta            uint64
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 	MaxCltvDelta uint64
+	MinCltvDelta uint64
 	// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
 	PaymentTimeout        uint64
 	PaymentTimePreference float64
@@ -30,7 +33,6 @@ type RelayParameters struct {
 type ProxyParameters struct {
 	Invoice         string      `json:"invoice"`
 	RoutingMsat     MaybeUInt64 `json:"routing_msat"`
-	AmountMsat      MaybeUInt64 `json:"amount_msat"`
 	Description     MaybeString `json:"description"`
 	DescriptionHash MaybeString `json:"description_hash"`
 }
@@ -82,8 +84,6 @@ func (ms *MaybeString) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-var InternalError = errors.New("Interenal error")
-
 func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParameters, uint64, error) {
 	for flag, feature := range p.Features {
 		switch flag {
@@ -96,28 +96,35 @@ func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParam
 		}
 	}
 
+	if p.NumMsat == 0 {
+		return nil, 0, errors.Join(ClientFacing, errors.New("zero amount invoices are not secure"))
+	}
+	if p.NumMsat < r.MinAmountMsat {
+		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
+	}
+
 	q := InvoiceParameters{}
 
 	hash, err := hex.DecodeString(p.PaymentHash)
 	if err != nil {
-		return nil, 0, errors.Join(InternalError, err)
+		return nil, 0, err
 	}
 	q.Hash = hash
 
 	if x.Description.Exists && x.DescriptionHash.Exists {
-		return nil, 0, fmt.Errorf("description and description hash cannot both be set")
+		return nil, 0, errors.Join(ClientFacing, errors.New("description and description hash cannot both be set"))
 	} else if x.Description.Exists {
 		q.Memo = x.Description.String
 	} else if x.DescriptionHash.Exists {
 		description_hash, err := hex.DecodeString(x.DescriptionHash.String)
 		if err != nil {
-			return nil, 0, errors.Join(InternalError, err)
+			return nil, 0, err
 		}
 		q.DescriptionHash = description_hash
 	} else if p.DescriptionHash != "" {
 		description_hash, err := hex.DecodeString(p.DescriptionHash)
 		if err != nil {
-			return nil, 0, errors.Join(InternalError, err)
+			return nil, 0, err
 		}
 		q.DescriptionHash = description_hash
 	} else {
@@ -126,39 +133,26 @@ func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParam
 
 	q.Expiry = p.Timestamp + p.Expiry - uint64(time.Now().Unix()) - r.ExpiryBuffer
 	if q.Expiry < 0 {
-		return nil, 0, fmt.Errorf("payment request expiration is too close.")
+		return nil, 0, errors.Join(ClientFacing, errors.New("payment request expiration is too close."))
 	}
+
 	q.CltvExpiry = p.CltvExpiry*r.CltvDeltaBeta + r.CltvDeltaAlpha
 	if q.CltvExpiry >= r.MaxCltvDelta {
-		return nil, 0, fmt.Errorf("cltv_expiry is too long")
+		return nil, 0, errors.Join(ClientFacing, errors.New("cltv_expiry is too long"))
+	} else if q.CltvExpiry < r.MinCltvDelta {
+		q.CltvExpiry = r.MinCltvDelta
 	}
 
-	var fee_budget_msat uint64
+	routing_fee_msat := r.RoutingFeeBaseMsat + (p.NumMsat*r.RoutingFeePPM)/1_000_000
 	if x.RoutingMsat.Exists {
-		fee_budget_msat = x.RoutingMsat.UInt64
-	} else if x.AmountMsat.Exists && p.NumMsat > 0 {
-		if x.AmountMsat.UInt64 < p.NumMsat {
-			return nil, 0, fmt.Errorf("proxy amount must be more than original amount")
+		if x.RoutingMsat.UInt64 < (r.MinFeeBudgetMsat + routing_fee_msat) {
+			return nil, 0, errors.Join(ClientFacing, errors.New("custom fee budget too low"))
 		}
-		fee_budget_msat = x.AmountMsat.UInt64 - p.NumMsat
-	} else if p.NumMsat > 0 {
-		fee_budget_msat = r.DefaultFeeBudgetBaseMsat + (r.DefaultFeeBudgetPPM*p.NumMsat)/1_000_000
-	} else if x.AmountMsat.Exists {
-		fee_budget_msat = x.AmountMsat.UInt64
-	} else {
-		return &q, 0, nil
+		q.ValueMsat = p.NumMsat + x.RoutingMsat.UInt64
+		return &q, x.RoutingMsat.UInt64 - routing_fee_msat, nil
 	}
-
-	if fee_budget_msat < (r.MinFeeBudgetMsat + r.RoutingFeeBaseMsat + (r.RoutingFeePPM*p.NumMsat)/1_000_000) {
-		return nil, 0, fmt.Errorf("fee budget too low")
-	}
-	if p.NumMsat == 0 {
-		return &q, fee_budget_msat, nil
-	}
-	if p.NumMsat < r.MinAmountMsat {
-		return nil, 0, fmt.Errorf("invoice amount too low")
-	}
-	q.ValueMsat = p.NumMsat + fee_budget_msat
+	fee_budget_msat := r.DefaultFeeBudgetBaseMsat + (r.DefaultFeeBudgetPPM*p.NumMsat)/1_000_000
+	q.ValueMsat = p.NumMsat + fee_budget_msat + routing_fee_msat
 	return &q, fee_budget_msat, nil
 }
 
@@ -172,11 +166,13 @@ func Relay(ln LN, r RelayParameters, x ProxyParameters) (string, error) {
 		return "", err
 	}
 	proxy_invoice, err := ln.AddInvoice(*q)
-	if err != nil {
+	if errors.Is(err, PaymentHashExists) {
+		return "", errors.Join(ClientFacing, PaymentHashExists)
+	} else if err != nil {
 		return "", err
 	}
 	go func() {
-		amt_paid_msat, err := ln.WatchInvoice(q.Hash)
+		_, err := ln.WatchInvoice(q.Hash)
 		if err != nil {
 			log.Println("Error while watching wrapped invoice:", x.Invoice, err)
 			err := ln.CancelInvoice(q.Hash)
@@ -185,44 +181,12 @@ func Relay(ln LN, r RelayParameters, x ProxyParameters) (string, error) {
 			}
 			return
 		}
-		amount_msat := p.NumMsat
-		routing_fee_msat := r.RoutingFeeBaseMsat + (amt_paid_msat*r.RoutingFeePPM)/1_000_000
-		if fee_budget_msat == 0 {
-			if amt_paid_msat < routing_fee_msat+r.MinFeeBudgetMsat {
-				log.Println("Payment to zero amount invoice too low", x.Invoice)
-				err := ln.CancelInvoice(q.Hash)
-				if err != nil {
-					log.Println("error while canceling invoice:", x.Invoice, err)
-				}
-				return
-			}
-			fee_budget_msat = amt_paid_msat - routing_fee_msat
-		} else if amount_msat == 0 {
-			if amt_paid_msat <= fee_budget_msat || amt_paid_msat < (r.MinAmountMsat+fee_budget_msat) {
-				log.Println("Amount paid too low", x.Invoice)
-				err := ln.CancelInvoice(q.Hash)
-				if err != nil {
-					log.Println("error while canceling invoice:", x.Invoice, err)
-				}
-				return
-			}
-			if q.ValueMsat > 0 {
-				amount_msat = q.ValueMsat - fee_budget_msat
-			} else {
-				amount_msat = amt_paid_msat - fee_budget_msat
-			}
-		}
-		payment := PaymentParameters{
-			Invoice:           x.Invoice,
-			TimeoutSeconds:    r.PaymentTimeout,
-			AmtMsat:           amount_msat,
-			FeeLimitMsat:      fee_budget_msat - routing_fee_msat,
-			NoInflightUpdates: true,
-			CltvLimit:         q.CltvExpiry - r.CltvDeltaAlpha,
-			Amp:               false,
-			TimePref:          r.PaymentTimePreference,
-		}
-		preimage, err := ln.PayInvoice(payment)
+		preimage, err := ln.PayInvoice(PaymentParameters{
+			Invoice:        x.Invoice,
+			TimeoutSeconds: r.PaymentTimeout,
+			FeeLimitMsat:   fee_budget_msat,
+			CltvLimit:      q.CltvExpiry - r.CltvDeltaAlpha,
+		})
 		if err != nil {
 			log.Println("Error paying original invoice:", x.Invoice, err)
 			err := ln.CancelInvoice(q.Hash)
