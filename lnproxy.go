@@ -87,12 +87,11 @@ func (ms *MaybeString) UnmarshalJSON(data []byte) error {
 func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParameters, uint64, error) {
 	for flag, feature := range p.Features {
 		switch flag {
-		case "8", "9", "14", "15", "16", "17", "48", "49":
+		case "8", "9", "14", "15", "16", "17", "25", "48", "49":
+			// 25 is route blinding
 		default:
 			log.Printf("unhandled feature flag: %s\n\t%v\n", flag, feature)
-			if feature.IsRequired {
-				return nil, 0, fmt.Errorf("invalid required feature: %s (%s)", feature.Name, flag)
-			}
+			return nil, 0, fmt.Errorf("unknown feature flag: %s", flag)
 		}
 	}
 
