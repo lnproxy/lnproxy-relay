@@ -130,10 +130,10 @@ func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParam
 		q.Memo = p.Description
 	}
 
-	q.Expiry = p.Timestamp + p.Expiry - uint64(time.Now().Unix()) - r.ExpiryBuffer
-	if q.Expiry < 0 {
+	if p.Timestamp + p.Expiry < uint64(time.Now().Unix()) + r.ExpiryBuffer {
 		return nil, 0, errors.Join(ClientFacing, errors.New("payment request expiration is too close."))
 	}
+	q.Expiry = p.Timestamp + p.Expiry - uint64(time.Now().Unix()) - r.ExpiryBuffer
 
 	q.CltvExpiry = p.CltvExpiry*r.CltvDeltaBeta + r.CltvDeltaAlpha
 	if q.CltvExpiry >= r.MaxCltvDelta {
