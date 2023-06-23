@@ -85,14 +85,15 @@ func (ms *MaybeString) UnmarshalJSON(data []byte) error {
 }
 
 func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParameters, uint64, error) {
-	for flag, feature := range p.Features {
+	for flag, _ := range p.Features {
 		switch flag {
-		case "8", "9", "14", "15", "16", "17", "25", "48", "49", "149":
+		case "8", "9", "14", "15", "16", "17", "25", "48", "49", "149", "151":
 			// 25 is route blinding
 			// 48/49 is payment metadata
 			// 148/149 is trampoline routing
+			// 150/151 is electrum's trampoline
 		default:
-			log.Printf("unhandled feature flag: %s\n\t%v\n", flag, feature)
+			log.Printf("unhandled feature flag: %s\n", x.Invoice)
 			return nil, 0, fmt.Errorf("unknown feature flag: %s", flag)
 		}
 	}
