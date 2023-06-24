@@ -8,6 +8,8 @@ import (
 	"log"
 	"strconv"
 	"time"
+
+	"github.com/lnproxy/lnc"
 )
 
 var ClientFacing = errors.New("")
@@ -84,7 +86,7 @@ func (ms *MaybeString) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParameters, uint64, error) {
+func Wrap(r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice) (*lnc.InvoiceParameters, uint64, error) {
 	for flag, _ := range p.Features {
 		switch flag {
 		case "8", "9", "14", "15", "16", "17", "25", "48", "49", "149", "151":
@@ -105,7 +107,7 @@ func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParam
 		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
 	}
 
-	q := InvoiceParameters{}
+	q := lnc.InvoiceParameters{}
 
 	hash, err := hex.DecodeString(p.PaymentHash)
 	if err != nil {
@@ -133,7 +135,7 @@ func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParam
 		q.Memo = p.Description
 	}
 
-	if p.Timestamp + p.Expiry < uint64(time.Now().Unix()) + r.ExpiryBuffer {
+	if p.Timestamp+p.Expiry < uint64(time.Now().Unix())+r.ExpiryBuffer {
 		return nil, 0, errors.Join(ClientFacing, errors.New("payment request expiration is too close."))
 	}
 	q.Expiry = p.Timestamp + p.Expiry - uint64(time.Now().Unix()) - r.ExpiryBuffer
@@ -158,7 +160,7 @@ func Wrap(r RelayParameters, x ProxyParameters, p DecodedInvoice) (*InvoiceParam
 	return &q, fee_budget_msat, nil
 }
 
-func Relay(ln LN, r RelayParameters, x ProxyParameters) (string, error) {
+func Relay(ln lnc.LN, r RelayParameters, x ProxyParameters) (string, error) {
 	p, err := ln.DecodeInvoice(x.Invoice)
 	if err != nil {
 		return "", err
@@ -168,8 +170,8 @@ func Relay(ln LN, r RelayParameters, x ProxyParameters) (string, error) {
 		return "", err
 	}
 	proxy_invoice, err := ln.AddInvoice(*q)
-	if errors.Is(err, PaymentHashExists) {
-		return "", errors.Join(ClientFacing, PaymentHashExists)
+	if errors.Is(err, lnc.PaymentHashExists) {
+		return "", errors.Join(ClientFacing, lnc.PaymentHashExists)
 	} else if err != nil {
 		return "", err
 	}
@@ -183,7 +185,7 @@ func Relay(ln LN, r RelayParameters, x ProxyParameters) (string, error) {
 			}
 			return
 		}
-		preimage, err := ln.PayInvoice(PaymentParameters{
+		preimage, err := ln.PayInvoice(lnc.PaymentParameters{
 			Invoice:        x.Invoice,
 			TimeoutSeconds: r.PaymentTimeout,
 			FeeLimitMsat:   fee_budget_msat,

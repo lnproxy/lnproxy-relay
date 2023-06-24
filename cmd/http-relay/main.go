@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/lnproxy/lnc"
 	"github.com/lnproxy/lnproxy"
 )
 
@@ -38,7 +39,7 @@ var (
 		PaymentTimePreference: 0.9,
 	}
 
-	lnd *lnproxy.Lnd
+	lnd *lnc.Lnd
 
 	validPath = regexp.MustCompile("^/api/(lnbc.*1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)")
 )
@@ -180,7 +181,7 @@ func main() {
 		},
 	}
 
-	lnd = &lnproxy.Lnd{
+	lnd = &lnc.Lnd{
 		Host:      lndHost,
 		Client:    lndClient,
 		TlsConfig: lndTlsConfig,
