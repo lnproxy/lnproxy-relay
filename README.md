@@ -39,7 +39,9 @@ It's easy, just
       uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
       uri:/invoicesrpc.Invoices/CancelInvoice \
       uri:/invoicesrpc.Invoices/SettleInvoice \
-      uri:/routerrpc.Router/SendPaymentV2
+      uri:/routerrpc.Router/SendPaymentV2 \
+      uri:/routerrpc.Router/EstimateRouteFee \
+      uri:/chainrpc.ChainKit/GetBestBlock
   ```
 - run: `./relay lnproxy.macaroon`
 - on a separate terminal:

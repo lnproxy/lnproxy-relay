@@ -82,17 +82,19 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	x := lnproxy.ProxyParameters{}
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
-		log.Println("Error decoding body:", err)
-		json.NewEncoder(w).Encode(makeJsonError("Error decoding request"))
+		log.Println("error decoding request:", err)
+		json.NewEncoder(w).Encode(makeJsonError("error decoding request"))
 		return
 	}
 
 	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
 	if errors.Is(err, lnproxy.ClientFacing) {
+		log.Println("client facing error:", err)
 		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
 		return
 	} else if err != nil {
-		json.NewEncoder(w).Encode(makeJsonError("Internal relay error"))
+		log.Println("internal error:", err)
+		json.NewEncoder(w).Encode(makeJsonError("internal error"))
 		return
 	}
 
@@ -134,7 +136,9 @@ func main() {
 			uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
 			uri:/invoicesrpc.Invoices/CancelInvoice \
 			uri:/invoicesrpc.Invoices/SettleInvoice \
-			uri:/routerrpc.Router/SendPaymentV2
+			uri:/routerrpc.Router/SendPaymentV2 \
+			uri:/routerrpc.Router/EstimateRouteFee \
+			uri:/chainrpc.ChainKit/GetBestBlock
 `, os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(2)
