@@ -22,15 +22,15 @@ import (
 
 var (
 	relayParameters = lnproxy.RelayParameters{
-		MinAmountMsat:            100000,
-		ExpiryBuffer:             300,
-		DefaultFeeBudgetBaseMsat: 1000,
-		DefaultFeeBudgetPPM:      9000,
-		MinFeeBudgetMsat:         1000,
-		RoutingFeeBaseMsat:       100,
-		RoutingFeePPM:            1000,
-		CltvDeltaAlpha:           3,
-		CltvDeltaBeta:            4,
+		MinAmountMsat:      10000,
+		ExpiryBuffer:       300,
+		MinFeeBudgetMsat:   1000,
+		RoutingBudgetAlpha: 1000,
+		RoutingBudgetBeta:  1_500_000,
+		RoutingFeeBaseMsat: 1000,
+		RoutingFeePPM:      1000,
+		CltvDeltaAlpha:     3,
+		CltvDeltaBeta:      1_500_000,
 		// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 		MaxCltvDelta: 1800,
 		MinCltvDelta: 120,

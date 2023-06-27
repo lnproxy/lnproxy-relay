@@ -15,15 +15,15 @@ import (
 var ClientFacing = errors.New("")
 
 type RelayParameters struct {
-	MinAmountMsat            uint64
-	DefaultFeeBudgetBaseMsat uint64
-	DefaultFeeBudgetPPM      uint64
-	MinFeeBudgetMsat         uint64
-	RoutingFeeBaseMsat       uint64
-	RoutingFeePPM            uint64
-	ExpiryBuffer             uint64
-	CltvDeltaAlpha           uint64
-	CltvDeltaBeta            uint64
+	MinAmountMsat      uint64
+	MinFeeBudgetMsat   uint64
+	RoutingFeeBaseMsat uint64
+	RoutingFeePPM      uint64
+	ExpiryBuffer       uint64
+	CltvDeltaAlpha     uint64
+	CltvDeltaBeta      uint64
+	RoutingBudgetAlpha uint64
+	RoutingBudgetBeta  uint64
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 	MaxCltvDelta uint64
 	MinCltvDelta uint64
@@ -86,7 +86,7 @@ func (ms *MaybeString) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func Wrap(r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice) (*lnc.InvoiceParameters, uint64, error) {
+func Wrap(ln lnc.LN, r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice) (*lnc.InvoiceParameters, uint64, error) {
 	for flag, _ := range p.Features {
 		switch flag {
 		case "8", "9", "14", "15", "16", "17", "25", "48", "49", "149", "151":
@@ -107,8 +107,12 @@ func Wrap(r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice) (*lnc.Invo
 		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
 	}
 
-	q := lnc.InvoiceParameters{}
+	min_fee_budget_msat, min_cltv_delta, err := ln.EstimateRoutingFee(p, 0)
+	if err != nil {
+		return nil, 0, err
+	}
 
+	q := lnc.InvoiceParameters{}
 	hash, err := hex.DecodeString(p.PaymentHash)
 	if err != nil {
 		return nil, 0, err
@@ -140,7 +144,7 @@ func Wrap(r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice) (*lnc.Invo
 	}
 	q.Expiry = p.Timestamp + p.Expiry - uint64(time.Now().Unix()) - r.ExpiryBuffer
 
-	q.CltvExpiry = p.CltvExpiry*r.CltvDeltaBeta + r.CltvDeltaAlpha
+	q.CltvExpiry = min_cltv_delta + r.CltvDeltaAlpha + (min_cltv_delta*r.CltvDeltaBeta)/1_000_000
 	if q.CltvExpiry >= r.MaxCltvDelta {
 		return nil, 0, errors.Join(ClientFacing, errors.New("cltv_expiry is too long"))
 	} else if q.CltvExpiry < r.MinCltvDelta {
@@ -155,7 +159,7 @@ func Wrap(r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice) (*lnc.Invo
 		q.ValueMsat = p.NumMsat + x.RoutingMsat.UInt64
 		return &q, x.RoutingMsat.UInt64 - routing_fee_msat, nil
 	}
-	fee_budget_msat := r.DefaultFeeBudgetBaseMsat + (r.DefaultFeeBudgetPPM*p.NumMsat)/1_000_000
+	fee_budget_msat := min_fee_budget_msat + r.RoutingBudgetAlpha + (min_fee_budget_msat*r.RoutingBudgetBeta)/1_000_000
 	q.ValueMsat = p.NumMsat + fee_budget_msat + routing_fee_msat
 	return &q, fee_budget_msat, nil
 }
@@ -165,16 +169,19 @@ func Relay(ln lnc.LN, r RelayParameters, x ProxyParameters) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	q, fee_budget_msat, err := Wrap(r, x, *p)
+
+	q, fee_budget_msat, err := Wrap(ln, r, x, *p)
 	if err != nil {
 		return "", err
 	}
+
 	proxy_invoice, err := ln.AddInvoice(*q)
 	if errors.Is(err, lnc.PaymentHashExists) {
 		return "", errors.Join(ClientFacing, lnc.PaymentHashExists)
 	} else if err != nil {
 		return "", err
 	}
+
 	go func() {
 		_, err := ln.WatchInvoice(q.Hash)
 		if err != nil {
@@ -205,5 +212,6 @@ func Relay(ln lnc.LN, r RelayParameters, x ProxyParameters) (string, error) {
 		}
 		log.Println("Relay circuit successful")
 	}()
+
 	return proxy_invoice, nil
 }
