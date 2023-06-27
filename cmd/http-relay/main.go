@@ -22,15 +22,15 @@ import (
 
 var (
 	relayParameters = lnproxy.RelayParameters{
-		MinAmountMsat:            100000,
-		ExpiryBuffer:             300,
-		DefaultFeeBudgetBaseMsat: 1000,
-		DefaultFeeBudgetPPM:      9000,
-		MinFeeBudgetMsat:         1000,
-		RoutingFeeBaseMsat:       100,
-		RoutingFeePPM:            1000,
-		CltvDeltaAlpha:           3,
-		CltvDeltaBeta:            4,
+		MinAmountMsat:      10000,
+		ExpiryBuffer:       300,
+		MinFeeBudgetMsat:   1000,
+		RoutingBudgetAlpha: 1000,
+		RoutingBudgetBeta:  1_500_000,
+		RoutingFeeBaseMsat: 1000,
+		RoutingFeePPM:      1000,
+		CltvDeltaAlpha:     3,
+		CltvDeltaBeta:      1_500_000,
 		// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
 		MaxCltvDelta: 1800,
 		MinCltvDelta: 120,
@@ -82,17 +82,19 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	x := lnproxy.ProxyParameters{}
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
-		log.Println("Error decoding body:", err)
-		json.NewEncoder(w).Encode(makeJsonError("Error decoding request"))
+		log.Println("error decoding request:", err)
+		json.NewEncoder(w).Encode(makeJsonError("error decoding request"))
 		return
 	}
 
 	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
 	if errors.Is(err, lnproxy.ClientFacing) {
+		log.Println("client facing error:", err)
 		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
 		return
 	} else if err != nil {
-		json.NewEncoder(w).Encode(makeJsonError("Internal relay error"))
+		log.Println("internal error:", err)
+		json.NewEncoder(w).Encode(makeJsonError("internal error"))
 		return
 	}
 
@@ -134,7 +136,9 @@ func main() {
 			uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
 			uri:/invoicesrpc.Invoices/CancelInvoice \
 			uri:/invoicesrpc.Invoices/SettleInvoice \
-			uri:/routerrpc.Router/SendPaymentV2
+			uri:/routerrpc.Router/SendPaymentV2 \
+			uri:/routerrpc.Router/EstimateRouteFee \
+			uri:/chainrpc.ChainKit/GetBestBlock
 `, os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(2)
