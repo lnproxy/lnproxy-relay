@@ -101,7 +101,7 @@ func Wrap(ln lnc.LN, r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice)
 	}
 
 	if p.NumMsat == 0 {
-		return nil, 0, errors.Join(ClientFacing, errors.New("zero amount invoices are not secure"))
+		return nil, 0, errors.Join(ClientFacing, errors.New("zero amount invoices cannot be relayed trustlessly"))
 	}
 	if p.NumMsat < r.MinAmountMsat {
 		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
@@ -109,7 +109,7 @@ func Wrap(ln lnc.LN, r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice)
 
 	min_fee_budget_msat, min_cltv_delta, err := ln.EstimateRoutingFee(p, 0)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, errors.Join(ClientFacing, errors.New("could not find route"))
 	}
 
 	q := lnc.InvoiceParameters{}
