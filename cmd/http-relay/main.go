@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -82,18 +83,23 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	x := lnproxy.ProxyParameters{}
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
-		log.Println("error decoding request:", err)
-		json.NewEncoder(w).Encode(makeJsonError("error decoding request"))
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Println("error reading request:", err)
+		} else {
+			log.Println("error decoding request:", string(body))
+		}
+		json.NewEncoder(w).Encode(makeJsonError("bad request"))
 		return
 	}
 
 	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
 	if errors.Is(err, lnproxy.ClientFacing) {
-		log.Println("client facing error:", err)
+		log.Printf("client facing error for %#v:%v\n", x, err)
 		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
 		return
 	} else if err != nil {
-		log.Println("internal error:", err)
+		log.Printf("internal error for %#v:%v\n", x, err)
 		json.NewEncoder(w).Encode(makeJsonError("internal error"))
 		return
 	}

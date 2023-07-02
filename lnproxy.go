@@ -96,7 +96,7 @@ func Wrap(ln lnc.LN, r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice)
 			// 150/151 is electrum's trampoline
 		default:
 			log.Printf("unhandled feature flag: %s\n", x.Invoice)
-			return nil, 0, fmt.Errorf("unknown feature flag: %s", flag)
+			return nil, 0, errors.Join(ClientFacing, fmt.Errorf("unknown feature flag: %s", flag))
 		}
 	}
 
@@ -109,6 +109,7 @@ func Wrap(ln lnc.LN, r RelayParameters, x ProxyParameters, p lnc.DecodedInvoice)
 
 	min_fee_budget_msat, min_cltv_delta, err := ln.EstimateRoutingFee(p, 0)
 	if err != nil {
+		log.Println("could not find route:", x.Invoice, err)
 		return nil, 0, errors.Join(ClientFacing, errors.New("could not find route"))
 	}
 
@@ -185,7 +186,7 @@ func Relay(ln lnc.LN, r RelayParameters, x ProxyParameters) (string, error) {
 	go func() {
 		_, err := ln.WatchInvoice(q.Hash)
 		if err != nil {
-			log.Println("Error while watching wrapped invoice:", x.Invoice, err)
+			log.Println("error while watching wrapped invoice:", x.Invoice, err)
 			err := ln.CancelInvoice(q.Hash)
 			if err != nil {
 				log.Println("error while canceling invoice:", x.Invoice, err)
@@ -199,7 +200,7 @@ func Relay(ln lnc.LN, r RelayParameters, x ProxyParameters) (string, error) {
 			CltvLimit:      q.CltvExpiry - r.CltvDeltaAlpha,
 		})
 		if err != nil {
-			log.Println("Error paying original invoice:", x.Invoice, err)
+			log.Println("error paying original invoice:", x.Invoice, err)
 			err := ln.CancelInvoice(q.Hash)
 			if err != nil {
 				log.Println("error while canceling invoice:", x.Invoice, err)
@@ -208,9 +209,9 @@ func Relay(ln lnc.LN, r RelayParameters, x ProxyParameters) (string, error) {
 		}
 		err = ln.SettleInvoice(preimage)
 		if err != nil {
-			log.Panicln("Error while settling original invoice:", x.Invoice, err)
+			log.Panicln("error while settling original invoice:", x.Invoice, err)
 		}
-		log.Println("Relay circuit successful")
+		log.Println("relay circuit successful")
 	}()
 
 	return proxy_invoice, nil
