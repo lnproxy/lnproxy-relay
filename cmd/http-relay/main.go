@@ -81,19 +81,19 @@ func main() {
 	)
 
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon [circuits.gob]
-	lnproxy.macaroon
-		Path to lnproxy macaroon. Generate it with:
-			lncli bakemacaroon --save_to lnproxy.macaroon \
-				uri:/lnrpc.Lightning/DecodePayReq \
-				uri:/lnrpc.Lightning/LookupInvoice \
-				uri:/invoicesrpc.Invoices/AddHoldInvoice \
-				uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
-				uri:/invoicesrpc.Invoices/CancelInvoice \
-				uri:/invoicesrpc.Invoices/SettleInvoice \
-				uri:/routerrpc.Router/SendPaymentV2 \
-				uri:/routerrpc.Router/EstimateRouteFee \
-				uri:/chainrpc.ChainKit/GetBestBlock
+		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon
+  lnproxy.macaroon
+	Path to lnproxy macaroon. Generate it with:
+		lncli bakemacaroon --save_to lnproxy.macaroon \
+			uri:/lnrpc.Lightning/DecodePayReq \
+			uri:/lnrpc.Lightning/LookupInvoice \
+			uri:/invoicesrpc.Invoices/AddHoldInvoice \
+			uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+			uri:/invoicesrpc.Invoices/CancelInvoice \
+			uri:/invoicesrpc.Invoices/SettleInvoice \
+			uri:/routerrpc.Router/SendPaymentV2 \
+			uri:/routerrpc.Router/EstimateRouteFee \
+			uri:/chainrpc.ChainKit/GetBestBlock
 `, os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(2)
