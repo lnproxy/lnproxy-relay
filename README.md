@@ -12,21 +12,21 @@ To configure the relay follow the usage instructions:
 	lnproxy.macaroon
 		Path to lnproxy macaroon. Generate it with:
 			lncli bakemacaroon --save_to lnproxy.macaroon 
-   				uri:/lnrpc.Lightning/DecodePayReq \
-   				uri:/lnrpc.Lightning/LookupInvoice \
-   				uri:/invoicesrpc.Invoices/AddHoldInvoice \
-   				uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
-   				uri:/invoicesrpc.Invoices/CancelInvoice \
-   				uri:/invoicesrpc.Invoices/SettleInvoice \
-   				uri:/routerrpc.Router/SendPaymentV2 \
-   				uri:/routerrpc.Router/EstimateRouteFee \
-   				uri:/chainrpc.ChainKit/GetBestBlock
+				uri:/lnrpc.Lightning/DecodePayReq \
+				uri:/lnrpc.Lightning/LookupInvoice \
+				uri:/invoicesrpc.Invoices/AddHoldInvoice \
+				uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+				uri:/invoicesrpc.Invoices/CancelInvoice \
+				uri:/invoicesrpc.Invoices/SettleInvoice \
+				uri:/routerrpc.Router/SendPaymentV2 \
+				uri:/routerrpc.Router/EstimateRouteFee \
+				uri:/chainrpc.ChainKit/GetBestBlock
 	-lnd string
 		host for lnd's REST api (default "https://127.0.0.1:8080")
-  	-lnd-cert string
-   		lnd's self-signed cert (set to empty string for no-rest-tls=true) (default ".lnd/tls.cert")
+	-lnd-cert string
+		lnd's self-signed cert (set to empty string for no-rest-tls=true) (default ".lnd/tls.cert")
 	-port string
- 		http port over which to expose api (default "4747")
+		http port over which to expose api (default "4747")
 
 Run the binary:
 
@@ -37,8 +37,8 @@ and on a separate terminal, test with:
 
 	curl -s --header "Content-Type: application/json" \
 		--request POST \
-  		--data '{"invoice":"<bolt11 invoice>"}' \
-   		http://localhost:4747/spec
+		--data '{"invoice":"<bolt11 invoice>"}' \
+		http://localhost:4747/spec
 
 ## Expose your relay over tor
 
@@ -54,12 +54,11 @@ and run:
 
 	cat /var/tor/lnproxy.org/hostname
 
- to get the onion url and try:
+to get the onion url and try:
 
 	torify curl -s --header "Content-Type: application/json" \
 		--request POST \
-  		--data '{"invoice":"<bolt11 invoice>"}' \
+		--data '{"invoice":"<bolt11 invoice>"}' \
 		http://<your .onion url>/spec
 
- Once you're happy with it, make a PR to add your url to: https://github.com/lnproxy/lnproxy-webui2/blob/main/assets/relays.json
- 
+Once you're happy with it, make a PR to add your url to: https://github.com/lnproxy/lnproxy-webui2/blob/main/assets/relays.json
