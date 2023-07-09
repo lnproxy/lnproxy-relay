@@ -1,56 +1,65 @@
-# lnproxy
+# lnproxy-relay
 
-## What
+## Running a relay
 
-lnproxy takes a bolt 11 invoice and generates a “wrapped” invoice that can be settled *if and only if* the original invoice is settled. The “wrapped” invoice has the same payment hash, expiry, and description, as the invoice it wraps but adds a small routing budget to the amount. The “wrapped” invoice can be used anywhere the original invoice would be used to trustlessly obfuscate the destination of a payment.
+This program uses the lnd REST API to handle lightning things so you'll need an lnd.conf with:
 
-## Why
+	restlisten=localhost:8080
 
-Lightning network privacy will improve. In the meantime, users of custodial lightning wallets, like Wallet of Satoshi or the Bitcoin Beach Wallet, reveal the destination of every lightning payment they make to their custodian. With lnproxy, these users can instead generate and pay wrapped invoices to obfuscate the destination of the payment from their custodian.
+To configure the relay follow the usage instructions:
 
-Users that operate public lightning network nodes, reveal the identity of their node with every lightning invoice they generate. With lnproxy, users can instead generate and give out wrapped invoices to obfuscate the identity of their lightning network nodes from their transaction counterparties.
+	usage: ./lnproxy [flags] lnproxy.macaroon
+	lnproxy.macaroon
+		Path to lnproxy macaroon. Generate it with:
+			lncli bakemacaroon --save_to lnproxy.macaroon 
+   				uri:/lnrpc.Lightning/DecodePayReq \
+   				uri:/lnrpc.Lightning/LookupInvoice \
+   				uri:/invoicesrpc.Invoices/AddHoldInvoice \
+   				uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+   				uri:/invoicesrpc.Invoices/CancelInvoice \
+   				uri:/invoicesrpc.Invoices/SettleInvoice \
+   				uri:/routerrpc.Router/SendPaymentV2 \
+   				uri:/routerrpc.Router/EstimateRouteFee \
+   				uri:/chainrpc.ChainKit/GetBestBlock
+	-lnd string
+		host for lnd's REST api (default "https://127.0.0.1:8080")
+  	-lnd-cert string
+   		lnd's self-signed cert (set to empty string for no-rest-tls=true) (default ".lnd/tls.cert")
+	-port string
+ 		http port over which to expose api (default "4747")
 
-## How
+Run the binary:
 
-lnproxy wrapped invoices are hodl invoices. When an lnproxy node accepts an htlc for the wrapped invoice, it immediately pays the original invoice and uses the revealed preimage to settle the wrapped invoice. This ensures that you don't need to trust lnproxy with your payments.
+	$ ./lnproxy-http-relay-openbsd-amd64-00000000 lnproxy.macaroon
+	1970/01/01 00:00:00 HTTP server listening on: localhost:4747
 
-For additional privacy, using a vpn or the lnproxy node's tor hidden service prevents the lnproxy node from discovering your IP address. Onion routing on the lightning network protects the privacy for the source of payments to wrapped invoices.
+and on a separate terminal, test with:
 
-Anyone running a lightning network nodecan run an lnproxy server. **Users should verify that wrapped invoices are, in fact, conditional by decoding them to ensure that the payment hash matches that of the original invoice.**
+	curl -s --header "Content-Type: application/json" \
+		--request POST \
+  		--data '{"invoice":"<bolt11 invoice>"}' \
+   		http://localhost:4747/spec
 
-## Dev
+## Expose your relay over tor
 
-This little binary uses the lnd REST API to handle lightning things so running it requires lnd.
+If you know how to run a server you can put your relay behind a reverse proxy and and expose it to the internet.
+A simpler route is to use tor.
 
-## Run an lnproxy server
+Install tor, then edit `/etc/tor/torrc` to add:
 
-The more nodes run an api server, the more censorship resistant the project will be.
-It's easy, just
-- build the lnproxy binary (prebuilt releases coming soon):
-  ```
-    cd cmd/http-relay && go build
-  ```
-- generate a macaroon with minimal permissions for lnproxy to use:
-  ```
-    lncli bakemacaroon --save_to lnproxy.macaroon \
-      uri:/lnrpc.Lightning/DecodePayReq \
-      uri:/lnrpc.Lightning/LookupInvoice \
-      uri:/invoicesrpc.Invoices/AddHoldInvoice \
-      uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
-      uri:/invoicesrpc.Invoices/CancelInvoice \
-      uri:/invoicesrpc.Invoices/SettleInvoice \
-      uri:/routerrpc.Router/SendPaymentV2 \
-      uri:/routerrpc.Router/EstimateRouteFee \
-      uri:/chainrpc.ChainKit/GetBestBlock
-  ```
-- run: `./relay lnproxy.macaroon`
-- on a separate terminal:
-  ```
-    curl -s --header "Content-Type: application/json" \
-      --request POST \
-      --data '{"invoice":"<bolt11 invoice>"}' \
-      http://localhost:4747/spec
-  ```
+	HiddenServiceDir /var/tor/lnproxy/
+	HiddenServicePort 80 127.0.0.1:4747
 
-Once you've played with it a bit and set up tls or a tor hidden service for your api server,
-make a PR to add your url to: https://github.com/lnproxy/lnproxy-webui2/blob/main/assets/relays.json
+and run:
+
+	cat /var/tor/lnproxy.org/hostname
+
+ to get the onion url and try:
+
+	torify curl -s --header "Content-Type: application/json" \
+		--request POST \
+  		--data '{"invoice":"<bolt11 invoice>"}' \
+		http://<your .onion url>/spec
+
+ Once you're happy with it, make a PR to add your url to: https://github.com/lnproxy/lnproxy-webui2/blob/main/assets/relays.json
+ 
