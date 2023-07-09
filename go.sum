@@ -1,4 +1,4 @@
-github.com/lnproxy/lnc v0.0.0-20230702113239-a2b2139c0b26 h1:vpi2aKhF+MbJAdL7V3nULWqUgmR9BjRNQ2f6rLHgRZg=
-github.com/lnproxy/lnc v0.0.0-20230702113239-a2b2139c0b26/go.mod h1:QPI86ancedmkntYrFbludDtUOP40/TDMcIhR4V71AaY=
-golang.org/x/net v0.11.0 h1:Gi2tvZIJyBtO9SDr1q9h5hEQCp/4L2RQ+ar0qjx2oNU=
-golang.org/x/net v0.11.0/go.mod h1:2L/ixqYpgIVXmeoSA/4Lu7BzTG4KIyPIryS4IsOd1oQ=
+github.com/lnproxy/lnc v0.0.0-20230709161846-26ccc7de1314 h1:iaCrKX7G0H/3XOtpbHiHuNQHGBKkH0n3HCfOKHmGZ8I=
+github.com/lnproxy/lnc v0.0.0-20230709161846-26ccc7de1314/go.mod h1:G5r26LzotKe++whzqIs2LeL00DzQihZDQxBbI6bNlgg=
+golang.org/x/net v0.12.0 h1:cfawfvKITfUsFCeJIHJrbSxpeu/E81khclypR0GVT50=
+golang.org/x/net v0.12.0/go.mod h1:zEVYFnQC7m/vmpQFELhcD1EWkZlX69l4oqgmer6hfKA=

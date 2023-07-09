@@ -1,7 +1,7 @@
 module github.com/lnproxy/lnproxy
 
-go 1.19
+go 1.20
 
-require github.com/lnproxy/lnc v0.0.0-20230702113239-a2b2139c0b26
+require github.com/lnproxy/lnc v0.0.0-20230709161846-26ccc7de1314
 
-require golang.org/x/net v0.11.0 // indirect
+require golang.org/x/net v0.12.0 // indirect

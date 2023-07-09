@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -13,68 +14,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
-	"strconv"
+	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/lnproxy/lnc"
 	"github.com/lnproxy/lnproxy"
 )
 
-var (
-	relayParameters = lnproxy.RelayParameters{
-		MinAmountMsat:      10000,
-		ExpiryBuffer:       300,
-		MinFeeBudgetMsat:   1000,
-		RoutingBudgetAlpha: 1000,
-		RoutingBudgetBeta:  1_500_000,
-		RoutingFeeBaseMsat: 1000,
-		RoutingFeePPM:      1000,
-		CltvDeltaAlpha:     3,
-		CltvDeltaBeta:      1_500_000,
-		// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
-		MaxCltvDelta: 1800,
-		MinCltvDelta: 120,
-		// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
-		PaymentTimeout:        120,
-		PaymentTimePreference: 0.9,
-	}
-
-	lnd *lnc.Lnd
-
-	validPath = regexp.MustCompile("^/api/(lnbc.*1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]+)")
-)
-
-func apiHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
-	m := validPath.FindStringSubmatch(r.URL.Path)
-	if m == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	x := lnproxy.ProxyParameters{Invoice: m[1]}
-	routing_msat_string := r.URL.Query().Get("routing_msat")
-	if routing_msat_string != "" {
-		routing_msat, err := strconv.ParseUint(routing_msat_string, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid custom routing budget", http.StatusBadRequest)
-			return
-		}
-		x.RoutingMsat.Set(routing_msat)
-	}
-
-	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
-	if errors.Is(err, lnproxy.ClientFacing) {
-		http.Error(w, strings.TrimSpace(err.Error()), http.StatusInternalServerError)
-		return
-	} else if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	fmt.Fprintf(w, "%s", proxy_invoice)
-}
+var relay *lnproxy.Relay
 
 func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -84,16 +32,16 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
+		if err != io.EOF {
 			log.Println("error reading request:", err)
-		} else {
+		} else if len(body) > 0 {
 			log.Println("error decoding request:", string(body))
 		}
 		json.NewEncoder(w).Encode(makeJsonError("bad request"))
 		return
 	}
 
-	proxy_invoice, err := lnproxy.Relay(lnd, relayParameters, x)
+	proxy_invoice, err := relay.OpenCircuit(x)
 	if errors.Is(err, lnproxy.ClientFacing) {
 		log.Printf("client facing error for %#v:%v\n", x, err)
 		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
@@ -129,22 +77,23 @@ func main() {
 	lndCertPath := flag.String(
 		"lnd-cert",
 		".lnd/tls.cert",
-		"lnd's self-signed cert (set to empty string for no-rest-tls=true)")
+		"lnd's self-signed cert (set to empty string for no-rest-tls=true)",
+	)
 
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon
-  lnproxy.macaroon
-	Path to lnproxy macaroon. Generate it with:
-		lncli bakemacaroon --save_to lnproxy.macaroon \
-			uri:/lnrpc.Lightning/DecodePayReq \
-			uri:/lnrpc.Lightning/LookupInvoice \
-			uri:/invoicesrpc.Invoices/AddHoldInvoice \
-			uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
-			uri:/invoicesrpc.Invoices/CancelInvoice \
-			uri:/invoicesrpc.Invoices/SettleInvoice \
-			uri:/routerrpc.Router/SendPaymentV2 \
-			uri:/routerrpc.Router/EstimateRouteFee \
-			uri:/chainrpc.ChainKit/GetBestBlock
+		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon [circuits.gob]
+	lnproxy.macaroon
+		Path to lnproxy macaroon. Generate it with:
+			lncli bakemacaroon --save_to lnproxy.macaroon \
+				uri:/lnrpc.Lightning/DecodePayReq \
+				uri:/lnrpc.Lightning/LookupInvoice \
+				uri:/invoicesrpc.Invoices/AddHoldInvoice \
+				uri:/invoicesrpc.Invoices/SubscribeSingleInvoice \
+				uri:/invoicesrpc.Invoices/CancelInvoice \
+				uri:/invoicesrpc.Invoices/SettleInvoice \
+				uri:/routerrpc.Router/SendPaymentV2 \
+				uri:/routerrpc.Router/EstimateRouteFee \
+				uri:/chainrpc.ChainKit/GetBestBlock
 `, os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(2)
@@ -158,15 +107,13 @@ func main() {
 
 	macaroonBytes, err := os.ReadFile(flag.Args()[0])
 	if err != nil {
-		fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnproxy macaroon file: %v\n", err)
-		os.Exit(2)
+		log.Fatalln("unable to read lnproxy macaroon file:", err)
 	}
 	macaroon := hex.EncodeToString(macaroonBytes)
 
 	lndHost, err := url.Parse(*lndHostString)
 	if err != nil {
-		fmt.Fprintf(flag.CommandLine.Output(), "Unable to parse lnd host url: %v\n", err)
-		os.Exit(2)
+		log.Fatalln("unable to parse lnd host url:", err)
 	}
 	// If this is not set then websocket errors:
 	lndHost.Path = "/"
@@ -177,8 +124,7 @@ func main() {
 	} else {
 		lndCert, err := os.ReadFile(*lndCertPath)
 		if err != nil {
-			fmt.Fprintf(flag.CommandLine.Output(), "Unable to read lnd tls certificate file: %v\n", err)
-			os.Exit(2)
+			log.Fatalln("unable to read lnd tls certificate file:", err)
 		}
 		caCertPool := x509.NewCertPool()
 		caCertPool.AppendCertsFromPEM(lndCert)
@@ -191,15 +137,45 @@ func main() {
 		},
 	}
 
-	lnd = &lnc.Lnd{
+	lnd := &lnc.Lnd{
 		Host:      lndHost,
 		Client:    lndClient,
 		TlsConfig: lndTlsConfig,
 		Macaroon:  macaroon,
 	}
 
-	http.HandleFunc("/spec", specApiHandler)
-	http.HandleFunc("/api/", apiHandler)
+	relay = lnproxy.NewRelay(lnd)
 
-	log.Fatalln(http.ListenAndServe("localhost:"+*httpPort, nil))
+	http.HandleFunc("/spec", specApiHandler)
+
+	server := &http.Server{
+		Addr:              "localhost:" + *httpPort,
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      20 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt)
+		<-sigint
+		if err := server.Shutdown(context.Background()); err != nil {
+			log.Println("HTTP server shutdown error:", err)
+		}
+		close(idleConnsClosed)
+		log.Println("HTTP server shutdown")
+	}()
+	go func() {
+		log.Println("HTTP server listening on:", server.Addr)
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			log.Println("HTTP server ListenAndServe error:", err)
+		}
+	}()
+	<-idleConnsClosed
+
+	signal.Reset(os.Interrupt)
+	log.Println("waiting for open circuits...")
+	relay.WaitGroup.Wait()
 }
