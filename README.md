@@ -11,7 +11,7 @@ To configure the relay follow the usage instructions:
 	usage: ./lnproxy [flags] lnproxy.macaroon
 	lnproxy.macaroon
 		Path to lnproxy macaroon. Generate it with:
-			lncli bakemacaroon --save_to lnproxy.macaroon 
+			lncli bakemacaroon --save_to lnproxy.macaroon
 				uri:/lnrpc.Lightning/DecodePayReq \
 				uri:/lnrpc.Lightning/LookupInvoice \
 				uri:/invoicesrpc.Invoices/AddHoldInvoice \
