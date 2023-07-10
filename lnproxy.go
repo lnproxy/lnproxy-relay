@@ -66,7 +66,7 @@ func NewRelay(ln lnc.LN) *Relay {
 // Parameters for lnproxy requests
 type ProxyParameters struct {
 	Invoice         string  `json:"invoice"`
-	RoutingMsat     *uint64 `json:"routing_msat"`
+	RoutingMsat     *uint64 `json:"routing_msat,stringreadingreading"`
 	Description     *string `json:"description"`
 	DescriptionHash *string `json:"description_hash"`
 }

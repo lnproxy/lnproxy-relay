@@ -31,11 +31,12 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	x := lnproxy.ProxyParameters{}
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
+		log.Println("error decoding request:", err)
 		body, err := io.ReadAll(r.Body)
 		if err != io.EOF {
 			log.Println("error reading request:", err)
 		} else if len(body) > 0 {
-			log.Println("error decoding request:", string(body))
+			log.Println("request:", string(body))
 		}
 		json.NewEncoder(w).Encode(makeJsonError("bad request"))
 		return
