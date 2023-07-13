@@ -66,8 +66,11 @@ Once you're happy with it, make a PR to add your url to: https://github.com/lnpr
 ## Operating your relay
 
 Sending `SIGINT` (with Ctrl-C) to the running relay will cause it to shutdown the http server
-and stop accepting new invoices. A second `SIGINT` cancel all unsettled open invoices.
-To upgrade, simply sending one `SIGINT` and allow the program to run until all invoices
-are expired, it's safe to start the new binary immediately since the http server
+and stop accepting new invoices, it will wait for the last open invoice to expire, before fully shutting itself down.
+A second `SIGINT` will cancel all open invoices and cause the relay to shutdown immediately.
+
+When upgrading to the latest binaries, simply send one `SIGINT`
+and allow the program to shut itself down gracefully.
+It is safe to start the new binary immediately since the http server
 from the first binary will already have shut itself down.
 This way your relay can continue to proxy payments even while upgrading.
