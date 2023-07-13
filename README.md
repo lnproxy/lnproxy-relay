@@ -2,7 +2,8 @@
 
 ## Running a relay
 
-This program uses the lnd REST API to handle lightning things so you'll need an lnd.conf with:
+This program uses the lnd REST API to handle lightning things so you'll need an lnd.conf with,
+for example:
 
 	restlisten=localhost:8080
 
