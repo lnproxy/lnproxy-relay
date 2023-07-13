@@ -62,3 +62,12 @@ to get the onion url and try:
 		http://<your .onion url>/spec
 
 Once you're happy with it, make a PR to add your url to: https://github.com/lnproxy/lnproxy-webui2/blob/main/assets/relays.json
+
+## Operating your relay
+
+Sending `SIGINT` (with Ctrl-C) to the running relay will cause it to shutdown the http server
+and stop accepting new invoices. A second `SIGINT` cancel all unsettled open invoices.
+To upgrade, simply sending one `SIGINT` and allow the program to run until all invoices
+are expired, it's safe to start the new binary immediately since the http server
+from the first binary will already have shut itself down.
+This way your relay can continue to proxy payments even while upgrading.
