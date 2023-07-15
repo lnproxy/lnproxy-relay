@@ -33,7 +33,7 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println("error decoding request:", err)
 		body, err := io.ReadAll(r.Body)
-		if err != io.EOF {
+		if err != nil && err != io.EOF {
 			log.Println("error reading request:", err)
 		} else if len(body) > 0 {
 			log.Println("request:", string(body))
