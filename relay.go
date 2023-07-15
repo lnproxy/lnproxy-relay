@@ -80,6 +80,9 @@ func (relay *Relay) wrap(x ProxyParameters) (proxy_invoice_params *lnc.InvoicePa
 	if p.NumMsat == 0 {
 		return nil, 0, errors.Join(ClientFacing, errors.New("zero amount invoices cannot be relayed trustlessly"))
 	}
+	if p.NumMsat < relay.MinAmountMsat {
+		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
+	}
 
 	min_fee_budget_msat, min_cltv_delta, err := relay.LN.EstimateRoutingFee(*p, 0)
 	if err != nil {
@@ -95,13 +98,6 @@ func (relay *Relay) wrap(x ProxyParameters) (proxy_invoice_params *lnc.InvoicePa
 		default:
 			return nil, 0, errors.Join(ClientFacing, fmt.Errorf("unknown feature flag: %s", flag))
 		}
-	}
-
-	if p.NumMsat == 0 {
-		return nil, 0, errors.Join(ClientFacing, errors.New("zero amount invoices cannot be relayed trustlessly"))
-	}
-	if p.NumMsat < relay.MinAmountMsat {
-		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
 	}
 
 	q := lnc.InvoiceParameters{}
