@@ -1,4 +1,4 @@
-package lnproxy
+package relay
 
 import (
 	"encoding/hex"

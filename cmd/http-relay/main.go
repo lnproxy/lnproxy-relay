@@ -19,16 +19,16 @@ import (
 	"time"
 
 	"github.com/lnproxy/lnc"
-	"github.com/lnproxy/lnproxy"
+	"github.com/lnproxy/lnproxy-relay"
 )
 
-var relay *lnproxy.Relay
+var lnproxy_relay *relay.Relay
 
 func specApiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
 
-	x := lnproxy.ProxyParameters{}
+	x := relay.ProxyParameters{}
 	err := json.NewDecoder(r.Body).Decode(&x)
 	if err != nil {
 		log.Println("error decoding request:", err)
@@ -42,8 +42,8 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy_invoice, err := relay.OpenCircuit(x)
-	if errors.Is(err, lnproxy.ClientFacing) {
+	proxy_invoice, err := lnproxy_relay.OpenCircuit(x)
+	if errors.Is(err, relay.ClientFacing) {
 		log.Printf("client facing error for %#v:%v\n", x, err)
 		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
 		return
@@ -145,7 +145,7 @@ func main() {
 		Macaroon:  macaroon,
 	}
 
-	relay = lnproxy.NewRelay(lnd)
+	lnproxy_relay = relay.NewRelay(lnd)
 
 	http.HandleFunc("/spec", specApiHandler)
 
@@ -178,5 +178,5 @@ func main() {
 
 	signal.Reset(os.Interrupt)
 	log.Println("waiting for open circuits...")
-	relay.WaitGroup.Wait()
+	lnproxy_relay.WaitGroup.Wait()
 }

@@ -1,4 +1,4 @@
-module github.com/lnproxy/lnproxy
+module github.com/lnproxy/lnproxy-relay
 
 go 1.20
 
