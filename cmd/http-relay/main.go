@@ -44,11 +44,11 @@ func specApiHandler(w http.ResponseWriter, r *http.Request) {
 
 	proxy_invoice, err := lnproxy_relay.OpenCircuit(x)
 	if errors.Is(err, relay.ClientFacing) {
-		log.Printf("client facing error for %#v:%v\n", x, err)
+		log.Println("client facing error", strings.TrimSpace(err.Error()), "for", x)
 		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
 		return
 	} else if err != nil {
-		log.Printf("internal error for %#v:%v\n", x, err)
+		log.Println("internal error", strings.TrimSpace(err.Error()), "for", x)
 		json.NewEncoder(w).Encode(makeJsonError("internal error"))
 		return
 	}

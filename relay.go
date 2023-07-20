@@ -71,6 +71,19 @@ type ProxyParameters struct {
 	DescriptionHash *string `json:"description_hash"`
 }
 
+func (x ProxyParameters) String() string {
+	result := fmt.Sprintf("ProxyParameters {Invoice:%s", x.Invoice)
+	if x.RoutingMsat != nil {
+		result += fmt.Sprintf(" RoutingMsat:%d", *(x.RoutingMsat))
+	}
+	if x.Description != nil {
+		result += fmt.Sprintf(" Description:\"%s\"", *(x.Description))
+	} else if x.DescriptionHash != nil {
+		result += fmt.Sprintf(" DescriptionHash:%s", *(x.DescriptionHash))
+	}
+	return result + "}"
+}
+
 func (relay *Relay) wrap(x ProxyParameters) (proxy_invoice_params *lnc.InvoiceParameters, fee_budget_msat uint64, err error) {
 	p, err := relay.LN.DecodeInvoice(x.Invoice)
 	if err != nil {
