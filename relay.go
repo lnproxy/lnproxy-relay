@@ -50,13 +50,13 @@ func NewRelay(ln lnc.LN) *Relay {
 			RoutingBudgetBeta:  1_500_000,
 			RoutingFeeBaseMsat: 1000,
 			RoutingFeePPM:      1000,
-			CltvDeltaAlpha:     3,
+			CltvDeltaAlpha:     144,
 			CltvDeltaBeta:      1_500_000,
 			// Should be set to at most the node's `--max-cltv-expiry` setting (default: 2016)
 			MaxCltvDelta: 1800,
 			MinCltvDelta: 120,
 			// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
-			PaymentTimeout:        120,
+			PaymentTimeout:        600,
 			PaymentTimePreference: 0.9,
 		},
 		LN: ln,
@@ -194,21 +194,23 @@ func (relay *Relay) OpenCircuit(x ProxyParameters) (string, error) {
 func (relay *Relay) circuitSwitch(hash []byte, invoice string, fee_budget_msat, cltv_limit uint64) {
 	defer relay.WaitGroup.Done()
 	log.Println("opened circuit for:", invoice, hex.EncodeToString(hash))
-	var preimage []byte
 	_, err := relay.LN.WatchInvoice(hash)
 	if err != nil {
 		log.Println("error while watching wrapped invoice:", hex.EncodeToString(hash), err)
-		goto cleanup
+		err = relay.LN.CancelInvoice(hash)
+		if err != nil {
+			log.Println("error while canceling invoice:", hash, err)
+		}
+		return
 	}
-	preimage, err = relay.LN.PayInvoice(lnc.PaymentParameters{
+	preimage, err := relay.LN.PayInvoice(lnc.PaymentParameters{
 		Invoice:        invoice,
 		TimeoutSeconds: relay.PaymentTimeout,
 		FeeLimitMsat:   fee_budget_msat,
 		CltvLimit:      cltv_limit,
 	})
 	if err != nil {
-		log.Println("error paying original invoice:", hex.EncodeToString(hash), err)
-		goto cleanup
+		log.Panicln("error paying original invoice:", hex.EncodeToString(hash), err)
 	}
 	log.Println("preimage:", hex.EncodeToString(preimage), hex.EncodeToString(hash))
 	err = relay.LN.SettleInvoice(preimage)
@@ -216,12 +218,5 @@ func (relay *Relay) circuitSwitch(hash []byte, invoice string, fee_budget_msat, 
 		log.Panicln("error while settling original invoice:", hex.EncodeToString(hash), err)
 	}
 	log.Println("circuit settled")
-	return
-
-cleanup:
-	err = relay.LN.CancelInvoice(hash)
-	if err != nil {
-		log.Println("error while canceling invoice:", hash, err)
-	}
 	return
 }
