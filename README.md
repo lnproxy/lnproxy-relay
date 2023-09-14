@@ -75,3 +75,27 @@ and allow the program to shut itself down gracefully.
 It is safe to start the new binary immediately since the http server
 from the first binary will already have shut itself down.
 This way your relay can continue to proxy payments even while upgrading.
+
+### Recovering from errors
+
+If an unexpected error occurs when a payment to an original invoice is settled
+but the accepted proxy invoice payment is not yet settled,
+funds will be at risk.
+This lnproxy relay tries, wherever possible, to completely shutdown in this situation:
+if a single circuit does not complete as expected, the executable will
+shutdown and stop accepting new invoices or sending out new payments to settle
+active invoices.
+This ensures that at most `MaxAmountMsat` Bitcoin will be in a "limbo" state
+at any one time (the default value is 1,000,000 satoshis).
+
+Even if such an error occurs, and an lnproxy relay circuit ends up in a limbo state,
+it will almost certainly be possible to recover from the error manually.
+If you notice that your relay excutable has terminated
+(it's easy to set up an alert from this on *NIX systems by just adding
+another command to follow the lnproxy relay command in whatever script invokes it),
+you will have `CltvDeltaAlpha` blocks (by default about one day) to
+manually settle the proxy payment.
+To do this, simply use `lncli listinvoices` to find any invoices in the `ACCEPTED` state,
+and then lookup their associated payments using the payment hash (`r_hash`).
+If the payment was completed you should have a preimage you can use to
+settle the `ACCEPTED` invoice.

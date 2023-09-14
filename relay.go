@@ -21,6 +21,7 @@ type Relay struct {
 
 type RelayParameters struct {
 	MinAmountMsat      uint64
+	MaxAmountMsat      uint64
 	MinFeeBudgetMsat   uint64
 	RoutingFeeBaseMsat uint64
 	RoutingFeePPM      uint64
@@ -42,7 +43,8 @@ type RelayParameters struct {
 func NewRelay(ln lnc.LN) *Relay {
 	return &Relay{
 		RelayParameters: RelayParameters{
-			MinAmountMsat:      10000,
+			MinAmountMsat:      10_000,
+			MaxAmountMsat:      1_000_000_000,
 			ExpiryBuffer:       300,
 			MaxExpiry:          604800, // 60*60*24*7 one week
 			MinFeeBudgetMsat:   1000,
@@ -56,7 +58,7 @@ func NewRelay(ln lnc.LN) *Relay {
 			MaxCltvDelta: 1800,
 			MinCltvDelta: 120,
 			// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
-			PaymentTimeout:        600,
+			PaymentTimeout:        60,
 			PaymentTimePreference: 0.9,
 		},
 		LN: ln,
@@ -95,6 +97,9 @@ func (relay *Relay) wrap(x ProxyParameters) (proxy_invoice_params *lnc.InvoicePa
 	}
 	if p.NumMsat < relay.MinAmountMsat {
 		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too low"))
+	}
+	if p.NumMsat > relay.MaxAmountMsat {
+		return nil, 0, errors.Join(ClientFacing, errors.New("invoice amount too high"))
 	}
 
 	min_fee_budget_msat, min_cltv_delta, err := relay.LN.EstimateRoutingFee(*p, 0)
@@ -210,8 +215,15 @@ func (relay *Relay) circuitSwitch(hash []byte, invoice string, fee_budget_msat, 
 		FeeLimitMsat:   fee_budget_msat,
 		CltvLimit:      cltv_limit,
 	})
-	if err != nil {
-		log.Panicln("error paying original invoice:", hex.EncodeToString(hash), err)
+	if errors.Is(err, lnc.PaymentFailed) {
+		log.Println("payment failed", hex.EncodeToString(hash), err)
+		err = relay.LN.CancelInvoice(hash)
+		if err != nil {
+			log.Println("error while canceling invoice:", hash, err)
+		}
+		return
+	} else if err != nil {
+		log.Panicln("payment in unknown state:", hex.EncodeToString(hash), err)
 	}
 	log.Println("preimage:", hex.EncodeToString(preimage), hex.EncodeToString(hash))
 	err = relay.LN.SettleInvoice(preimage)
