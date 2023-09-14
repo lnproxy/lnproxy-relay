@@ -99,6 +99,7 @@ func (relay *Relay) wrap(x ProxyParameters) (proxy_invoice_params *lnc.InvoicePa
 
 	min_fee_budget_msat, min_cltv_delta, err := relay.LN.EstimateRoutingFee(*p, 0)
 	if err != nil {
+		log.Println("route estimation error:", err)
 		return nil, 0, errors.Join(ClientFacing, errors.New("could not find route"))
 	}
 	for flag, _ := range p.Features {
