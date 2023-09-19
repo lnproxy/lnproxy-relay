@@ -98,4 +98,5 @@ manually settle the proxy payment.
 To do this, simply use `lncli listinvoices` to find any invoices in the `ACCEPTED` state,
 and then lookup their associated payments using the payment hash (`r_hash`).
 If the payment was completed you should have a preimage you can use to
-settle the `ACCEPTED` invoice.
+settle the `ACCEPTED` invoice.  If the payment failed, no funds are at risk,
+you can cancel the hodl invoice.
