@@ -32,8 +32,8 @@ type RelayParameters struct {
 	RoutingBudgetAlpha uint64
 	RoutingBudgetBeta  uint64
 	// Should be set to the same as the node's `--max-cltv-expiry` setting (default: 2016)
-	MaxCltvDelta uint64
-	MinCltvDelta uint64
+	MaxCltvExpiry uint64
+	MinCltvExpiry uint64
 	// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
 	PaymentTimeout        uint64
 	PaymentTimePreference float64
@@ -52,11 +52,11 @@ func NewRelay(ln lnc.LN) *Relay {
 			RoutingBudgetBeta:  1_500_000,
 			RoutingFeeBaseMsat: 1000,
 			RoutingFeePPM:      1000,
-			CltvDeltaAlpha:     144,
-			CltvDeltaBeta:      1_500_000,
+			CltvDeltaAlpha:     42,
+			CltvDeltaBeta:      42,
 			// Should be set to at most the node's `--max-cltv-expiry` setting (default: 2016)
-			MaxCltvDelta: 1800,
-			MinCltvDelta: 120,
+			MaxCltvExpiry: 1800,
+			MinCltvExpiry: 200,
 			// Should be set so that CltvDeltaAlpha blocks are very unlikely to be added before timeout
 			PaymentTimeout:        60,
 			PaymentTimePreference: 0.9,
@@ -155,11 +155,11 @@ func (relay *Relay) wrap(x ProxyParameters) (proxy_invoice_params *lnc.InvoicePa
 	}
 	q.Expiry = p.Timestamp + expiry - uint64(time.Now().Unix()) - relay.ExpiryBuffer
 
-	q.CltvExpiry = min_cltv_delta + relay.CltvDeltaAlpha + (min_cltv_delta*relay.CltvDeltaBeta)/1_000_000
-	if q.CltvExpiry >= relay.MaxCltvDelta {
+	q.CltvExpiry = min_cltv_delta + relay.CltvDeltaBeta + relay.CltvDeltaAlpha
+	if q.CltvExpiry >= relay.MaxCltvExpiry {
 		return nil, 0, errors.Join(ClientFacing, errors.New("cltv_expiry is too long"))
-	} else if q.CltvExpiry < relay.MinCltvDelta {
-		q.CltvExpiry = relay.MinCltvDelta
+	} else if q.CltvExpiry < relay.MinCltvExpiry {
+		q.CltvExpiry = relay.MinCltvExpiry
 	}
 
 	routing_fee_msat := relay.RoutingFeeBaseMsat + (p.NumMsat*relay.RoutingFeePPM)/1_000_000
@@ -192,20 +192,22 @@ func (relay *Relay) OpenCircuit(x ProxyParameters) (string, error) {
 	}
 
 	relay.WaitGroup.Add(1)
-	go relay.circuitSwitch(proxy_invoice_params.Hash, x.Invoice, fee_budget_msat, proxy_invoice_params.CltvExpiry-relay.CltvDeltaAlpha)
+	go relay.circuitSwitch(proxy_invoice_params.Hash, x.Invoice, fee_budget_msat)
 
 	return proxy_invoice, nil
 }
 
-func (relay *Relay) circuitSwitch(hash []byte, invoice string, fee_budget_msat, cltv_limit uint64) {
+func (relay *Relay) circuitSwitch(hash []byte, invoice string, fee_budget_msat uint64) {
 	defer relay.WaitGroup.Done()
 	log.Println("opened circuit for:", invoice, hex.EncodeToString(hash))
-	_, err := relay.LN.WatchInvoice(hash)
-	if err != nil {
-		log.Println("error while watching wrapped invoice:", hex.EncodeToString(hash), err)
-		err = relay.LN.CancelInvoice(hash)
-		if err != nil {
-			log.Println("error while canceling invoice:", hash, err)
+	invoice_state, err := relay.LN.WatchInvoice(hash)
+	if err != nil || invoice_state.State != lnc.Accepted {
+		log.Println("error while watching wrapped invoice:", hex.EncodeToString(hash), invoice_state.State, err)
+		if invoice_state.State != lnc.Canceled {
+			err = relay.LN.CancelInvoice(hash)
+			if err != nil {
+				log.Println("error while canceling invoice:", hash, err)
+			}
 		}
 		return
 	}
@@ -213,7 +215,7 @@ func (relay *Relay) circuitSwitch(hash []byte, invoice string, fee_budget_msat, 
 		Invoice:        invoice,
 		TimeoutSeconds: relay.PaymentTimeout,
 		FeeLimitMsat:   fee_budget_msat,
-		CltvLimit:      cltv_limit,
+		CltvLimit:      invoice_state.CltvExpiryDelta - relay.CltvDeltaAlpha,
 	})
 	if errors.Is(err, lnc.PaymentFailed) {
 		log.Println("payment failed", hex.EncodeToString(hash), err)
