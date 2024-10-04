@@ -73,9 +73,10 @@ func makeJsonError(reason string) JsonError {
 }
 
 func main() {
-	httpPort := flag.String("port", "4747", "http port over which to expose api")
-	lndHostString := flag.String("lnd", "https://127.0.0.1:8080", "host for lnd's REST api")
-	lndCertPath := flag.String(
+	httpHostFlag := flag.String("host", "localhost", "http host over which to expose api")
+	httpPortFlag := flag.String("port", "4747", "http port over which to expose api")
+	lndHostStringFlag := flag.String("lnd", "https://127.0.0.1:8080", "host for lnd's REST api")
+	lndCertPathFlag := flag.String(
 		"lnd-cert",
 		".lnd/tls.cert",
 		"lnd's self-signed cert (set to empty string for no-rest-tls=true)",
@@ -101,18 +102,39 @@ func main() {
 	}
 
 	flag.Parse()
-	if len(flag.Args()) != 1 {
+
+	httpHost := os.Getenv("LNPROXY_HOST")
+	if httpHost == "" {
+		httpHost = *httpHostFlag
+	}
+	httpPort := os.Getenv("LNPROXY_PORT")
+	if httpPort == "" {
+		httpPort = *httpPortFlag
+	}
+	lndHostString := os.Getenv("LNPROXY_LND_HOST")
+	if lndHostString == "" {
+		lndHostString = *lndHostStringFlag
+	}
+	lndCertPath := os.Getenv("LNPROXY_LND_CERT")
+	if lndCertPath == "" {
+		lndCertPath = *lndCertPathFlag
+	}
+
+	lnproxyMacaroon := os.Getenv("LNPROXY_MACAROON")
+	if lnproxyMacaroon == "" && len(flag.Args()) == 1 {
+		lnproxyMacaroon = flag.Args()[0]
+	} else if lnproxyMacaroon == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
 
-	macaroonBytes, err := os.ReadFile(flag.Args()[0])
+	macaroonBytes, err := os.ReadFile(lnproxyMacaroon)
 	if err != nil {
 		log.Fatalln("unable to read lnproxy macaroon file:", err)
 	}
 	macaroon := hex.EncodeToString(macaroonBytes)
 
-	lndHost, err := url.Parse(*lndHostString)
+	lndHost, err := url.Parse(lndHostString)
 	if err != nil {
 		log.Fatalln("unable to parse lnd host url:", err)
 	}
@@ -120,10 +142,10 @@ func main() {
 	lndHost.Path = "/"
 
 	var lndTlsConfig *tls.Config
-	if *lndCertPath == "" {
+	if lndCertPath == "" {
 		lndTlsConfig = &tls.Config{}
 	} else {
-		lndCert, err := os.ReadFile(*lndCertPath)
+		lndCert, err := os.ReadFile(lndCertPath)
 		if err != nil {
 			log.Fatalln("unable to read lnd tls certificate file:", err)
 		}
@@ -150,7 +172,7 @@ func main() {
 	http.HandleFunc("/spec", specApiHandler)
 
 	server := &http.Server{
-		Addr:              "localhost:" + *httpPort,
+		Addr:              httpHost + ":" + httpPort,
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       20 * time.Second,
 		WriteTimeout:      20 * time.Second,
