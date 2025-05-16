@@ -1,0 +1,19 @@
+services:
+  lnproxy-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lnproxy-relay
+    restart: unless-stopped
+    ports:
+      - "4747:4747"
+    volumes:
+      - ./lnproxy.macaroon:/app/lnproxy.macaroon:ro
+      - ${LND_CERT_PATH:-~/.lnd/tls.cert}:/app/tls.cert:ro
+    environment:
+      - TZ=UTC
+    command: >
+      -lnd=${LND_HOST:-https://127.0.0.1:8080}
+      -lnd-cert=/app/tls.cert
+      -port=4747
+      /app/lnproxy.macaroon
