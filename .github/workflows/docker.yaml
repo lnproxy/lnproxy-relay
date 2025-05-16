@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - master
+      - docker
 
 env:
   REGISTRY: ghcr.io
