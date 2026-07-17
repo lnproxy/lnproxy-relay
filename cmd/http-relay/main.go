@@ -5,72 +5,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"time"
 
 	"github.com/lnproxy/lnc"
 	"github.com/lnproxy/lnproxy-relay"
+	"github.com/lnproxy/lnproxy-relay/httpapi"
+	"github.com/lnproxy/lnproxy-relay/nostr"
 )
-
-var lnproxy_relay *relay.Relay
-
-func specApiHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
-
-	x := relay.ProxyParameters{}
-	err := json.NewDecoder(r.Body).Decode(&x)
-	if err != nil {
-		log.Println("error decoding request:", err)
-		body, err := io.ReadAll(r.Body)
-		if err != nil && err != io.EOF {
-			log.Println("error reading request:", err)
-		} else if len(body) > 0 {
-			log.Println("request:", string(body))
-		}
-		json.NewEncoder(w).Encode(makeJsonError("bad request"))
-		return
-	}
-
-	proxy_invoice, err := lnproxy_relay.OpenCircuit(x)
-	if errors.Is(err, relay.ClientFacing) {
-		log.Println("client facing error", strings.TrimSpace(err.Error()), "for", x)
-		json.NewEncoder(w).Encode(makeJsonError(strings.TrimSpace(err.Error())))
-		return
-	} else if err != nil {
-		log.Println("internal error", strings.TrimSpace(err.Error()), "for", x)
-		json.NewEncoder(w).Encode(makeJsonError("internal error"))
-		return
-	}
-
-	json.NewEncoder(w).Encode(struct {
-		WrappedInvoice string `json:"proxy_invoice"`
-	}{
-		WrappedInvoice: proxy_invoice,
-	})
-}
-
-type JsonError struct {
-	Status string `json:"status"`
-	Reason string `json:"reason"`
-}
-
-func makeJsonError(reason string) JsonError {
-	return JsonError{
-		Status: "ERROR",
-		Reason: reason,
-	}
-}
 
 func main() {
 	httpHostFlag := flag.String("host", "localhost", "http host over which to expose api")
@@ -81,6 +29,12 @@ func main() {
 		".lnd/tls.cert",
 		"lnd's self-signed cert (set to empty string for no-rest-tls=true)",
 	)
+	minMsatFlag := flag.Uint64("min-msat", 0, "minimum invoice amount in msat (0 = keep default/env)")
+	maxMsatFlag := flag.Uint64("max-msat", 0, "maximum invoice amount in msat (0 = keep default/env)")
+	baseFeeMsatFlag := flag.Uint64("base-fee-msat", 0, "relay base fee in msat (0 = keep default/env)")
+	feePpmFlag := flag.Uint64("fee-ppm", 0, "relay proportional fee in ppm (0 = keep default/env)")
+	maxExpiryFlag := flag.Uint64("max-expiry", 0, "maximum proxy invoice expiry in seconds (0 = keep default/env)")
+	maxActiveCircuitsFlag := flag.Uint64("max-active-circuits", 0, "maximum active hold-invoice circuits (0 = keep default/env)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s [flags] lnproxy.macaroon
@@ -167,12 +121,46 @@ func main() {
 		Macaroon:  macaroon,
 	}
 
-	lnproxy_relay = relay.NewRelay(lnd)
+	lnproxyRelay := relay.NewRelay(lnd)
 
-	http.HandleFunc("/spec", specApiHandler)
+	// Operators set their own fees and limits. Precedence: flag (if non-zero)
+	// overrides env, env overrides the built-in default.
+	if err := lnproxyRelay.RelayParameters.ApplyEnvOverrides(); err != nil {
+		log.Fatalln("invalid environment configuration:", err)
+	}
+	if *minMsatFlag != 0 {
+		lnproxyRelay.MinAmountMsat = *minMsatFlag
+	}
+	if *maxMsatFlag != 0 {
+		lnproxyRelay.MaxAmountMsat = *maxMsatFlag
+	}
+	if *baseFeeMsatFlag != 0 {
+		lnproxyRelay.RoutingFeeBaseMsat = *baseFeeMsatFlag
+	}
+	if *feePpmFlag != 0 {
+		lnproxyRelay.RoutingFeePPM = *feePpmFlag
+	}
+	if *maxExpiryFlag != 0 {
+		lnproxyRelay.MaxExpiry = *maxExpiryFlag
+	}
+	if *maxActiveCircuitsFlag != 0 {
+		lnproxyRelay.MaxActiveCircuits = *maxActiveCircuitsFlag
+	}
+	if err := lnproxyRelay.RelayParameters.Validate(); err != nil {
+		log.Fatalln("invalid relay configuration:", err)
+	}
+	log.Printf("relay limits: min=%d msat max=%d msat fee=%d msat + %d ppm max_expiry=%d s",
+		lnproxyRelay.MinAmountMsat, lnproxyRelay.MaxAmountMsat,
+		lnproxyRelay.RoutingFeeBaseMsat, lnproxyRelay.RoutingFeePPM, lnproxyRelay.MaxExpiry)
+
+	wrapper := nostr.NewServer(lnproxyRelay, nostr.Offer{
+		Features:         []string{nostr.FeatureWrapBolt11},
+		MaxExpirySeconds: lnproxyRelay.MaxExpiry,
+	})
 
 	server := &http.Server{
 		Addr:              httpHost + ":" + httpPort,
+		Handler:           httpapi.NewHandler(wrapper),
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       20 * time.Second,
 		WriteTimeout:      20 * time.Second,
@@ -200,5 +188,5 @@ func main() {
 
 	signal.Reset(os.Interrupt)
 	log.Println("waiting for open circuits...")
-	lnproxy_relay.WaitGroup.Wait()
+	lnproxyRelay.WaitGroup.Wait()
 }

@@ -1,0 +1,239 @@
+# Recommended anonymous signet deployment. The lnproxy container has no
+# Internet-connected network: Nostr WebSockets leave through Tor's SOCKS port,
+# and the direct endpoint is an ephemeral v3 onion service created through the
+# authenticated Tor control port.
+#
+# Run from this directory:
+#
+#   docker compose up -d --build
+#   docker compose logs -f tor lnproxy
+
+services:
+  bitcoind:
+    image: polarlightning/bitcoind:27.0
+    restart: unless-stopped
+    command:
+      - bitcoind
+      - -signet
+      - -server
+      - -txindex
+      - -rpcuser=lnproxy
+      - -rpcpassword=lnproxy-signet-local
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -zmqpubrawblock=tcp://0.0.0.0:28334
+      - -zmqpubrawtx=tcp://0.0.0.0:28335
+      - -fallbackfee=0.0002
+    volumes:
+      - bitcoind-data:/home/bitcoin/.bitcoin
+    networks:
+      - node-internal
+      - bitcoin-egress
+    healthcheck:
+      test: ["CMD-SHELL", "bitcoin-cli -signet -rpcuser=lnproxy -rpcpassword=lnproxy-signet-local getblockchaininfo >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add: &node-entrypoint-capabilities
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    pids_limit: 256
+
+  lnd:
+    image: polarlightning/lnd:0.18.3-beta
+    restart: unless-stopped
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    command:
+      - lnd
+      # Signet only. Use a backed-up seed for networks with valuable coins.
+      - --noseedbackup
+      - --tlsextradomain=lnd
+      - --bitcoin.active
+      - --bitcoin.signet
+      - --bitcoin.node=bitcoind
+      - --bitcoind.rpchost=bitcoind:38332
+      - --bitcoind.rpcuser=lnproxy
+      - --bitcoind.rpcpass=lnproxy-signet-local
+      - --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      - --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      - --rpclisten=0.0.0.0:10009
+      - --restlisten=0.0.0.0:8080
+      - --listen=0.0.0.0:9735
+      - --alias=lnproxy-tor-signet-example
+    ports:
+      - "9735:9735"
+    volumes:
+      - lnd-data:/home/lnd/.lnd
+    networks:
+      - node-internal
+      - lightning-egress
+    healthcheck:
+      test: ["CMD-SHELL", "lncli --lnddir=/home/lnd/.lnd --network=signet getinfo >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add: *node-entrypoint-capabilities
+    pids_limit: 256
+
+  bake-macaroon:
+    image: polarlightning/lnd:0.18.3-beta
+    depends_on:
+      lnd:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/usr/local/bin/bake-macaroon.sh"]
+    volumes:
+      - ./bake-macaroon.sh:/usr/local/bin/bake-macaroon.sh:ro
+      - lnd-data:/lnd:ro
+      - relay-credentials:/credentials
+    networks:
+      - node-internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+    pids_limit: 64
+
+  tor:
+    image: ghcr.io/m0wer/docker-tor:0.4.9.11
+    restart: unless-stopped
+    user: "1000:1000"
+    command:
+      - tor
+      - --ignore-missing-torrc
+      - -f
+      - /nonexistent
+      - --SocksPort
+      - "0.0.0.0:9050 IsolateSOCKSAuth"
+      - --ControlPort
+      - 0.0.0.0:9051
+      - --CookieAuthentication
+      - "1"
+      - --CookieAuthFile
+      - /var/run/tor/control_auth_cookie
+      - --DataDirectory
+      - /var/lib/tor
+      - --ClientOnly
+      - "1"
+      - --NoExec
+      - "1"
+      - --SafeLogging
+      - "1"
+      - --Log
+      - notice stdout
+    volumes:
+      - tor-data:/var/lib/tor
+      - tor-control:/var/run/tor
+    networks:
+      - tor-internal
+      - tor-egress
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9050"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  lnproxy:
+    build:
+      context: ../..
+    image: lnproxy-nostr-relay:tor-signet
+    restart: unless-stopped
+    user: "1000:1000"
+    depends_on:
+      bake-macaroon:
+        condition: service_completed_successfully
+      tor:
+        condition: service_healthy
+    environment:
+      LNPROXY_NETWORK: signet
+      LNPROXY_LND_HOST: https://lnd:8080
+      LNPROXY_LND_CERT: /credentials/tls.cert
+      LNPROXY_MACAROON: /credentials/lnproxy.macaroon
+      LNPROXY_NOSTR_RELAYS: wss://nos.lol,wss://relay.damus.io,wss://relay.primal.net,wss://nostr.mom
+      LNPROXY_HTTP_LISTEN: 0.0.0.0:4747
+      LNPROXY_TOR: "true"
+      LNPROXY_TOR_SOCKS: tor:9050
+      # Arbitrary SOCKS credentials activate Tor's IsolateSOCKSAuth policy.
+      LNPROXY_TOR_SOCKS_USERNAME: lnproxy-nostr
+      LNPROXY_TOR_SOCKS_PASSWORD: replace-with-random-value
+      LNPROXY_TOR_CONTROL: tor:9051
+      LNPROXY_TOR_CONTROL_COOKIE: /run/tor-control/control_auth_cookie
+      LNPROXY_TOR_TARGET: lnproxy:4747
+    command:
+      - --nostr-key=/home/lnproxy/lnproxy-nostr.key
+      - --features=pay_bolt11,pay_bolt11_blinded,wrap_bolt11
+      - --min-request-pow=20
+      - --announce-pow=20
+    volumes:
+      - relay-data:/home/lnproxy
+      - relay-credentials:/credentials:ro
+      # The controller-local path intentionally differs from Tor's reported
+      # path and is selected by LNPROXY_TOR_CONTROL_COOKIE.
+      - tor-control:/run/tor-control:ro
+    networks:
+      - node-internal
+      - tor-internal
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  bitcoind-data:
+  lnd-data:
+  relay-credentials:
+  relay-data:
+  tor-control:
+  tor-data:
+
+networks:
+  node-internal:
+    driver: bridge
+    internal: true
+  tor-internal:
+    driver: bridge
+    internal: true
+  bitcoin-egress:
+    driver: bridge
+  lightning-egress:
+    driver: bridge
+  tor-egress:
+    driver: bridge

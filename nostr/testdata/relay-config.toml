@@ -1,0 +1,16 @@
+# Minimal nostr-rs-relay config for lnproxy integration tests.
+[info]
+name = "lnproxy-test-relay"
+description = "ephemeral relay for lnproxy integration tests"
+
+[network]
+address = "0.0.0.0"
+port = 8080
+
+[limits]
+# Keep the relay permissive; the test drives proof of work itself.
+messages_per_sec = 0
+max_event_bytes = 131072
+
+[options]
+reject_future_seconds = 1800

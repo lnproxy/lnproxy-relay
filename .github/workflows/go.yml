@@ -1,0 +1,113 @@
+name: Go
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: lnproxy-relay
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: gofmt
+        working-directory: lnproxy-relay
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: vet
+        working-directory: lnproxy-relay
+        run: go vet ./...
+      - name: build
+        working-directory: lnproxy-relay
+        run: go build ./...
+      - name: build nostr relay image
+        working-directory: lnproxy-relay
+        run: docker build -t lnproxy-nostr-relay:test .
+      - name: validate Tor deployment example
+        working-directory: lnproxy-relay
+        run: |
+          bash -n examples/tor/bake-macaroon.sh
+          docker compose -f examples/tor/docker-compose.yml config --quiet
+      - name: test
+        working-directory: lnproxy-relay
+        run: go test -race ./...
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: lnproxy-relay
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: start nostr relay
+        working-directory: lnproxy-relay
+        run: docker compose -f docker-compose.test.yml up -d --wait || docker compose -f docker-compose.test.yml up -d
+      - name: integration tests
+        working-directory: lnproxy-relay
+        env:
+          LNPROXY_TEST_NOSTR_RELAY: ws://127.0.0.1:7777
+        run: go test -tags=integration ./nostr/...
+      - name: stop nostr relay
+        if: always()
+        working-directory: lnproxy-relay
+        run: docker compose -f docker-compose.test.yml down -v
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: lnproxy-relay
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install pre-commit
+      - name: pre-commit
+        working-directory: lnproxy-relay
+        run: pre-commit run --all-files
+
+  publish-image:
+    if: github.event_name == 'push'
+    needs:
+      - build-test
+      - integration
+      - pre-commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

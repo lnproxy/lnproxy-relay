@@ -1,0 +1,26 @@
+# Integration test stack for the nostr transport.
+#
+# Brings up a real nostr relay so the Go integration tests can exercise the
+# publish/subscribe, NIP-44 and NIP-13 paths over the wire (no mocked pool).
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   LNPROXY_TEST_NOSTR_RELAY=ws://127.0.0.1:7777 go test -tags=integration ./nostr/...
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  nostr-relay:
+    image: scsibug/nostr-rs-relay:latest
+    container_name: lnproxy-test-nostr-relay
+    restart: unless-stopped
+    ports:
+      - "7777:8080"
+    volumes:
+      - ./nostr/testdata/relay-config.toml:/usr/src/app/config.toml:ro
+    healthcheck:
+      # The relay answers the NIP-11 document over HTTP on the same port.
+      # The image has bash but no curl/wget, so issue the request over /dev/tcp.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET / HTTP/1.0\\r\\nAccept: application/nostr+json\\r\\n\\r\\n\" >&3; grep -q supported_nips <&3'"]
+      interval: 3s
+      timeout: 5s
+      retries: 20

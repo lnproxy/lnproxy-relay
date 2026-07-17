@@ -1,0 +1,7 @@
+.git
+.github
+tmp
+*.key
+*.macaroon
+*.cert
+.env
